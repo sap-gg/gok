@@ -1,73 +1,154 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
 var cfgFile string
 
-// rootCmd represents the base command when called without any subcommands
+const (
+	LogLevelKey   = "log.level"
+	LogFormatKey  = "log.format"
+	LogNoColorKey = "log.no_color"
+)
+
 var rootCmd = &cobra.Command{
 	Use:   "gok",
-	Short: "A brief description of your application",
-	Long: `A longer description that spans multiple lines and likely contains
-examples and usage of using your application. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
-	// Uncomment the following line if your bare application
-	// has an action associated with it:
-	// Run: func(cmd *cobra.Command, args []string) { },
+	Short: "Landscape Renderer for Minecraft",
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		configPath, configErr := initConfig()
+		initLogging()
+		if configErr != nil { // handle error after logging is initialized
+			return configErr
+		}
+		if configPath != "" {
+			log.Info().Msgf("using config file: %s", configPath)
+		}
+		return nil
+	},
+	Run: func(cmd *cobra.Command, args []string) {
+		log.Info().Msg("Hello from gok!")
+	},
 }
 
-// Execute adds all child commands to the root command and sets flags appropriately.
-// This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
 	err := rootCmd.Execute()
 	if err != nil {
+		log.Error().Err(err).Msg("command execution failed")
 		os.Exit(1)
 	}
 }
 
 func init() {
-	cobra.OnInitialize(initConfig)
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "",
+		"config file (default is $HOME/.gok.yaml)")
 
-	// Here you will define your flags and configuration settings.
-	// Cobra supports persistent flags, which, if defined here,
-	// will be global for your application.
+	rootCmd.PersistentFlags().String("log-level", "info", "log level: debug, info, warn, error")
+	_ = viper.BindPFlag(LogLevelKey, rootCmd.PersistentFlags().Lookup("log-level"))
 
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.gok.yaml)")
+	rootCmd.PersistentFlags().String("log-format", "console", "log format: console, json")
+	_ = viper.BindPFlag(LogFormatKey, rootCmd.PersistentFlags().Lookup("log-format"))
 
-	// Cobra also supports local flags, which will only run
-	// when this action is called directly.
-	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	rootCmd.PersistentFlags().Bool("no-color", false, "disable color output")
+	_ = viper.BindPFlag(LogNoColorKey, rootCmd.PersistentFlags().Lookup("no-color"))
+
+	viper.SetEnvPrefix("GOK")
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
+	viper.AutomaticEnv() // read in environment variables that match
+
+	rootCmd.SilenceUsage = true
+	rootCmd.SilenceErrors = true
 }
 
-// initConfig reads in config file and ENV variables if set.
-func initConfig() {
+func initConfig() (string, error) {
+	// reads in config file and ENV variables if set.
 	if cfgFile != "" {
-		// Use config file from the flag.
 		viper.SetConfigFile(cfgFile)
 	} else {
-		// Find home directory.
-		home, err := os.UserHomeDir()
-		cobra.CheckErr(err)
+		// search order: current dir, $HOME, XDG config
+		viper.AddConfigPath(".")
 
-		// Search config in home directory with name ".gok" (without extension).
-		viper.AddConfigPath(home)
+		home, err := os.UserHomeDir()
+		if err == nil {
+			viper.AddConfigPath(home)
+		}
+
+		config, err := os.UserConfigDir()
+		if err == nil {
+			viper.AddConfigPath(config + "/gok")
+		}
+
 		viper.SetConfigType("yaml")
 		viper.SetConfigName(".gok")
 	}
 
-	viper.AutomaticEnv() // read in environment variables that match
-
 	// If a config file is found, read it in.
-	if err := viper.ReadInConfig(); err == nil {
-		fmt.Fprintln(os.Stderr, "Using config file:", viper.ConfigFileUsed())
+	if err := viper.ReadInConfig(); err != nil {
+		var notFoundError viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFoundError) {
+			return "", err
+		}
+	} else {
+		return viper.ConfigFileUsed(), nil
+	}
+
+	return "", nil
+}
+
+func initLogging() {
+	var queue []string
+
+	zerolog.TimeFieldFormat = time.RFC3339Nano
+
+	levelMap := map[string]zerolog.Level{
+		"trace": zerolog.TraceLevel,
+		"debug": zerolog.DebugLevel,
+		"info":  zerolog.InfoLevel,
+		"warn":  zerolog.WarnLevel,
+		"error": zerolog.ErrorLevel,
+	}
+	levelStr := strings.ToLower(viper.GetString(LogLevelKey))
+	level, ok := levelMap[levelStr]
+	if !ok {
+		level = zerolog.InfoLevel
+		queue = append(queue, fmt.Sprintf("unknown log level %q, using info", levelStr))
+	}
+	zerolog.SetGlobalLevel(level)
+
+	format := strings.ToLower(viper.GetString(LogFormatKey))
+	if format == "json" {
+		log.Logger = zerolog.New(os.Stderr).With().
+			Timestamp().
+			Logger()
+	} else {
+		if format != "console" {
+			queue = append(queue, fmt.Sprintf("unknown log format %q, using console", format))
+		}
+		log.Logger = zerolog.New(zerolog.NewConsoleWriter(func(w *zerolog.ConsoleWriter) {
+			w.Out = os.Stderr
+			w.NoColor = viper.GetBool(LogNoColorKey)
+			w.TimeFormat = "15:04:05.000"
+		})).With().
+			Timestamp().
+			Logger()
+	}
+
+	if zerolog.GlobalLevel() == zerolog.DebugLevel {
+		log.Logger = log.Logger.With().
+			Caller().
+			Logger()
+	}
+
+	for _, msg := range queue {
+		log.Warn().Msg(msg)
 	}
 }
