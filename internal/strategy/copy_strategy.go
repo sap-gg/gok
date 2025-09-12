@@ -1,4 +1,4 @@
-package render
+package strategy
 
 import (
 	"context"
@@ -13,15 +13,16 @@ import (
 
 var _ FileStrategy = (*CopyOnlyStrategy)(nil)
 
-// CopyOnlyStrategy is a FileStrategy that simply copies files if the destination doesn't exist,
-// otherwise warn (no overwrite).
-type CopyOnlyStrategy struct{}
+// CopyOnlyStrategy is a FileStrategy that simply copies files and overwrites them if Overwrite is true.
+type CopyOnlyStrategy struct {
+	Overwrite bool
+}
 
 func (s *CopyOnlyStrategy) Name() string {
 	return "copy-only"
 }
 
-func (s *CopyOnlyStrategy) Apply(ctx context.Context, src, dst string, tr *Tracker) error {
+func (s *CopyOnlyStrategy) Apply(ctx context.Context, src, dst string, tr trackerApplier) error {
 	log.Debug().Msgf("copy-only %q to %q...", src, dst)
 
 	// Best-effort context check, no I/O cancellation
@@ -36,8 +37,10 @@ func (s *CopyOnlyStrategy) Apply(ctx context.Context, src, dst string, tr *Track
 	}
 
 	if _, err := os.Stat(dst); err == nil {
-		log.Warn().
-			Msgf("destination exists; skipping: %q", dst)
+		if !s.Overwrite {
+			log.Warn().
+				Msgf("destination exists; skipping: %q", dst)
+		}
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat dst %q: %w", dst, err)

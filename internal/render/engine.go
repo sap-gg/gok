@@ -8,23 +8,24 @@ import (
 	"path/filepath"
 
 	"github.com/rs/zerolog/log"
+	"github.com/sap-gg/gok/internal/strategy"
 )
 
 // Engine performs the rendering for manifest targets
 type Engine struct {
 	resolver *PathResolver
-	registry *StrategyRegistry
+	registry *strategy.Registry
 	tracker  *Tracker
 }
 
 type EngineConfig struct {
 	ManifestDir string
 	WorkDir     string
-	Registry    *StrategyRegistry
+	Registry    *strategy.Registry
 }
 
 // NewEngine creates a new rendering engine. All parameters are required.
-func NewEngine(manifestDir, workDir string, registry *StrategyRegistry) (*Engine, error) {
+func NewEngine(manifestDir, workDir string, registry *strategy.Registry) (*Engine, error) {
 	if manifestDir == "" || workDir == "" || registry == nil {
 		return nil, fmt.Errorf("invalid engine config")
 	}
@@ -134,6 +135,5 @@ func (e *Engine) applyDir(ctx context.Context, srcDir, dstDir string) error {
 }
 
 func (e *Engine) applyFile(ctx context.Context, src, dst string) error {
-	strategy := e.registry.For(src)
-	return strategy.Apply(ctx, src, dst, e.tracker)
+	return e.registry.For(src).Apply(ctx, src, dst, e.tracker)
 }

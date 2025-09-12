@@ -8,6 +8,7 @@ import (
 	"github.com/goccy/go-yaml"
 	"github.com/rs/zerolog/log"
 	"github.com/sap-gg/gok/internal/render"
+	"github.com/sap-gg/gok/internal/strategy"
 	"github.com/spf13/cobra"
 )
 
@@ -17,6 +18,7 @@ var renderFlags = struct {
 	allTargets   bool
 	outPath      string
 	noDelete     bool
+	overwrite    bool
 }{}
 
 // renderCmd represents the render command
@@ -67,7 +69,9 @@ var renderCmd = &cobra.Command{
 			}()
 		}
 
-		registry, err := render.NewStrategyRegistry(&render.CopyOnlyStrategy{}, map[string]render.FileStrategy{})
+		registry, err := strategy.NewRegistry(&strategy.CopyOnlyStrategy{
+			Overwrite: renderFlags.overwrite,
+		}, map[string]strategy.FileStrategy{})
 		if err != nil {
 			return fmt.Errorf("creating strategy registry: %w", err)
 		}
@@ -104,4 +108,7 @@ func init() {
 		"Output path for rendered files (defaults to target-specific paths)")
 	renderCmd.Flags().BoolVar(&renderFlags.noDelete, "no-delete", false,
 		"Do not delete the temporary working directory (for debugging purposes)")
+
+	renderCmd.Flags().BoolVar(&renderFlags.overwrite, "overwrite", false,
+		"Overwrite existing files in the output directory")
 }
