@@ -23,8 +23,18 @@ var renderFlags = struct {
 
 // renderCmd represents the render command
 var renderCmd = &cobra.Command{
-	Use: "render",
-	// TODO: add short and long descriptions
+	Use:   "render",
+	Short: "Render one or more targets from a manifest into a temporary work tree.",
+	Example: `
+  # Render a single target
+  gok render -m manifest.yaml -t proxy-1
+
+  # Render multiple targets
+  gok render -m manifest.yaml -t proxy-1 -t proxy-2
+
+  # Render all targets
+  gok render -m manifest.yaml -A
+`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 
