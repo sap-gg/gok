@@ -181,5 +181,19 @@ func (e *Engine) applyDir(
 }
 
 func (e *Engine) applyFile(ctx context.Context, src, dst string, tracker *Tracker) error {
-	return e.registry.For(src).Apply(ctx, src, dst, tracker)
+	var strat strategy.FileStrategy
+
+	// if the destination file does not already exist, use the fallback strategy
+	if _, err := os.Stat(dst); errors.Is(err, os.ErrNotExist) {
+		log.Debug().Msgf("destination %q does not exist, using fallback strategy", dst)
+		strat = e.registry.Fallback()
+	} else {
+		var ok bool
+		strat, ok = e.registry.For(dst)
+		if ok {
+			log.Debug().Msgf("using strategy %q for %q (by ext)", strat.Name(), dst)
+		}
+	}
+
+	return strat.Apply(ctx, src, dst, tracker)
 }

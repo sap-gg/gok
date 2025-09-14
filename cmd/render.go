@@ -81,7 +81,10 @@ var renderCmd = &cobra.Command{
 
 		registry, err := strategy.NewRegistry(&strategy.CopyOnlyStrategy{
 			Overwrite: renderFlags.overwrite,
-		}, map[string]strategy.FileStrategy{})
+		}, map[string]strategy.FileStrategy{
+			// *.properties files should be patched, not overwritten
+			".properties": &strategy.PropertiesPatchStrategy{},
+		})
 		if err != nil {
 			return fmt.Errorf("creating strategy registry: %w", err)
 		}

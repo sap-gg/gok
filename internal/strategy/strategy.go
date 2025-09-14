@@ -47,10 +47,15 @@ func NewRegistry(fallback FileStrategy, mappings map[string]FileStrategy) (*Regi
 }
 
 // For returns the strategy for a given filename.
-func (r *Registry) For(filename string) FileStrategy {
+func (r *Registry) For(filename string) (FileStrategy, bool) {
 	ext := strings.ToLower(filepath.Ext(filename))
 	if s, ok := r.byExtension[ext]; ok {
-		return s
+		return s, true
 	}
+	return r.fallback, false
+}
+
+// Fallback returns the fallback strategy.
+func (r *Registry) Fallback() FileStrategy {
 	return r.fallback
 }
