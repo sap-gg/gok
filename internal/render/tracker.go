@@ -19,26 +19,41 @@ const (
 	LockFileName    = "gok-lock.yaml"
 )
 
+// LockFile represents the structure of the lock file used to record the state of rendered files.
+type LockFile struct {
+	Version     int                   `yaml:"version"`
+	GeneratedAt time.Time             `yaml:"generatedAt"`
+	FilesMap    map[string]*LockEntry `yaml:"files"`
+}
+
+type LockEntry struct {
+	Hash  string    `yaml:"hash"`
+	MTime time.Time `yaml:"mtime"`
+	Size  int64     `yaml:"size"`
+}
+
+///
+
 type Tracker struct {
-	workDir  string
+	resolver PathResolver
 	affected map[string]struct{}
 }
 
 // NewTracker creates a new Tracker for the specified working directory.
-func NewTracker(workDir string) *Tracker {
+func NewTracker(resolver PathResolver) *Tracker {
 	return &Tracker{
-		workDir:  workDir,
 		affected: make(map[string]struct{}),
+		resolver: resolver,
 	}
 }
 
 // Record marks the specified path as created / modified.
-func (tr *Tracker) Record(path string) {
-	tr.affected[filepath.Clean(path)] = struct{}{}
+func (tr *Tracker) Record(absPath string) {
+	tr.affected[filepath.Clean(absPath)] = struct{}{}
 }
 
-// Affected returns a stable, sorted list of affected absolute paths
-func (tr *Tracker) Affected() []string {
+// AffectedAbsolutePaths returns a stable, sorted list of affected absolute paths
+func (tr *Tracker) AffectedAbsolutePaths() []string {
 	paths := make([]string, 0, len(tr.affected))
 	for p := range tr.affected {
 		paths = append(paths, p)
@@ -49,64 +64,56 @@ func (tr *Tracker) Affected() []string {
 
 ///
 
-type LockFile struct {
-	Version     int         `yaml:"version"`
-	GeneratedAt time.Time   `yaml:"generatedAt"`
-	Files       []LockEntry `yaml:"files"`
-}
-
-type LockEntry struct {
-	Path  string    `yaml:"path"`
-	Hash  string    `yaml:"hash"`
-	MTime time.Time `yaml:"mtime"`
-	Size  int64     `yaml:"size"`
-}
-
 func (tr *Tracker) WriteLock() error {
-	abs := tr.Affected()
+	abs := tr.AffectedAbsolutePaths()
 	log.Debug().
 		Int("count", len(abs)).
-		Msg("writing lock file for affected files")
+		Msg("writing lock file for affected files...")
 
-	entries := make([]LockEntry, 0, len(abs))
-	for _, p := range abs {
-		info, err := os.Stat(p)
-		if err != nil {
-			return fmt.Errorf("stat %q: %w", p, err)
-		}
-		if !info.Mode().IsRegular() {
-			continue
-		}
-
-		sum, err := fileSHA256(p)
-		if err != nil {
-			return fmt.Errorf("hash %q: %w", p, err)
-		}
-		rel, err := filepath.Rel(tr.workDir, p)
-		if err != nil {
-			return fmt.Errorf("rel %q: %w", p, err)
-		}
-
-		entries = append(entries, LockEntry{
-			Path:  filepath.ToSlash(rel),
-			Hash:  sum,
-			MTime: info.ModTime().UTC(),
-			Size:  info.Size(),
-		})
+	// try to create the lock file
+	lockPath, err := tr.resolver.Resolve(LockFileName)
+	if err != nil {
+		return fmt.Errorf("resolve lock file path: %w", err)
 	}
-
-	lock := LockFile{
-		Version:     LockFileVersion,
-		GeneratedAt: time.Now().UTC(),
-		Files:       entries,
-	}
-
-	lockPath := filepath.Join(tr.workDir, LockFileName)
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return fmt.Errorf("create lock file %q: %w", lockPath, err)
 	}
 	defer f.Close()
+
+	lock := LockFile{
+		Version:     LockFileVersion,
+		GeneratedAt: time.Now().UTC(),
+		FilesMap:    make(map[string]*LockEntry),
+	}
+
+	for _, absolutePath := range abs {
+		info, err := os.Stat(absolutePath)
+		if err != nil {
+			return fmt.Errorf("stat %q: %w", absolutePath, err)
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+
+		sum, err := fileSHA256(absolutePath)
+		if err != nil {
+			return fmt.Errorf("hash %q: %w", absolutePath, err)
+		}
+
+		// we need to store the path relative path
+		// to make it easier to compare across different machines
+		rel, err := tr.resolver.Relative(absolutePath)
+		if err != nil {
+			return fmt.Errorf("rel %q: %w", absolutePath, err)
+		}
+
+		lock.FilesMap[rel] = &LockEntry{
+			Hash:  sum,
+			MTime: info.ModTime().UTC(),
+			Size:  info.Size(),
+		}
+	}
 
 	enc := internal.NewYAMLEncoder(f)
 	if err := enc.Encode(lock); err != nil {

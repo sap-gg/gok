@@ -13,8 +13,9 @@ const ManifestVersion = 1
 
 // Manifest represents the structure of the manifest file used to define rendering targets and their associated templates.
 type Manifest struct {
-	Version int                        `yaml:"version"`
-	Targets map[string]*ManifestTarget `yaml:"targets"`
+	Version    int                        `yaml:"version"`
+	Targets    map[string]*ManifestTarget `yaml:"targets"`
+	Exclusions []string                   `yaml:"exclude"`
 }
 
 // ManifestTarget represents a single rendering target, including its output path and the list of templates to be applied.

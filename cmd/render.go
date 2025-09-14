@@ -91,7 +91,7 @@ var renderCmd = &cobra.Command{
 			return fmt.Errorf("creating render engine: %w", err)
 		}
 
-		if err := engine.RenderTargets(ctx, targets); err != nil {
+		if err := engine.RenderTargets(ctx, manifest, targets); err != nil {
 			return fmt.Errorf("rendering targets: %w", err)
 		}
 

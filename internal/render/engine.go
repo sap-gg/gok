@@ -13,15 +13,15 @@ import (
 
 // Engine performs the rendering for manifest targets
 type Engine struct {
-	resolver *PathResolver
 	registry *strategy.Registry
-	tracker  *Tracker
-}
 
-type EngineConfig struct {
-	ManifestDir string
-	WorkDir     string
-	Registry    *strategy.Registry
+	// manifestDir is the directory of the manifest.yaml
+	manifestDir         string
+	manifestDirResolver *GenericPathResolver
+
+	// workDir is the directory where rendering output is placed
+	workDir         string
+	workDirResolver *GenericPathResolver
 }
 
 // NewEngine creates a new rendering engine. All parameters are required.
@@ -29,56 +29,71 @@ func NewEngine(manifestDir, workDir string, registry *strategy.Registry) (*Engin
 	if manifestDir == "" || workDir == "" || registry == nil {
 		return nil, fmt.Errorf("invalid engine config")
 	}
+
+	manifestDirResolver, err := NewGenericPathResolver(manifestDir)
+	if err != nil {
+		return nil, fmt.Errorf("manifest dir resolver: %w", err)
+	}
+
+	workDirResolver, err := NewGenericPathResolver(workDir)
+	if err != nil {
+		return nil, fmt.Errorf("work dir resolver: %w", err)
+	}
+
 	return &Engine{
-		resolver: NewPathResolver(manifestDir, workDir),
 		registry: registry,
-		tracker:  NewTracker(workDir),
+
+		manifestDir:         manifestDir,
+		manifestDirResolver: manifestDirResolver,
+
+		workDir:         workDir,
+		workDirResolver: workDirResolver,
 	}, nil
 }
 
-func (e *Engine) Tracker() *Tracker {
-	return e.tracker
-}
-
-func (e *Engine) RenderTargets(ctx context.Context, targets []*ManifestTarget) error {
+func (e *Engine) RenderTargets(ctx context.Context, m *Manifest, targets []*ManifestTarget) error {
 	var combined error
 	for _, t := range targets {
-		if err := e.renderOne(ctx, t); err != nil {
-			log.Error().Err(err).
-				Str("target", t.ID).
-				Msg("render failed")
+		if err := e.renderOne(ctx, m, t); err != nil {
+			log.Error().Err(err).Msgf("failed to render target %s", t.ID)
 			combined = errors.Join(combined, fmt.Errorf("target %s: %w", t.ID, err))
+		} else {
+			log.Info().Msgf("successfully rendered target %s", t.ID)
 		}
-		log.Info().
-			Str("target", t.ID).
-			Msg("rendered target")
 	}
-	if err := e.tracker.WriteLock(); err != nil {
-		log.Error().Err(err).Msg("failed to write lock file")
-		combined = errors.Join(combined, err)
-	}
+	// TODO: re-enable lock file writing
+
 	return combined
 }
 
-func (e *Engine) renderOne(ctx context.Context, t *ManifestTarget) error {
-	outputDir, err := e.resolver.ResolveOutputDir(t.Output)
+func (e *Engine) renderOne(ctx context.Context, m *Manifest, t *ManifestTarget) error {
+	// construct the output directory. for example if the `-o test` flag is specified and the manifest.yaml
+	// lies in /home/user/manifest.yaml and the target output is `out`, then
+	// the final output directory is /home/user/test/out
+	outputDir, err := e.workDirResolver.Resolve(t.Output)
 	if err != nil {
-		return fmt.Errorf("resolve output dir: %w", err)
+		return fmt.Errorf("resolve output dir %q: %w", t.Output, err)
 	}
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return fmt.Errorf("create output dir %q: %w", outputDir, err)
 	}
-	log.Info().
-		Str("target", t.ID).
-		Str("output", outputDir).
-		Msg("prepared output directory")
+
+	log.Info().Msgf("prepared output directory for %s: %q", t.ID, outputDir)
+
+	currentOutputResolver, err := NewGenericPathResolver(outputDir)
+	if err != nil {
+		return fmt.Errorf("output dir resolver: %w", err)
+	}
+
+	tracker := NewTracker(currentOutputResolver)
 
 	for _, raw := range t.Templates {
-		log.Debug().
+		log.Info().
 			Str("template", raw).
 			Msg("processing template")
 
-		srcRoot, err := e.resolver.ResolveTemplateInput(raw)
+		// srcRoot is the absolute path to the template source (file or directory)
+		srcRoot, err := e.manifestDirResolver.Resolve(raw)
 		if err != nil {
 			return fmt.Errorf("resolve template input %q: %w", raw, err)
 		}
@@ -92,28 +107,56 @@ func (e *Engine) renderOne(ctx context.Context, t *ManifestTarget) error {
 			return fmt.Errorf("stat template input %q: %w", srcRoot, err)
 		}
 
-		if info.IsDir() {
-			if err := e.applyDir(ctx, srcRoot, outputDir); err != nil {
-				return fmt.Errorf("apply dir %q: %w", srcRoot, err)
-			}
-		} else {
-			dst := filepath.Join(outputDir, filepath.Base(srcRoot))
-			if err := e.applyFile(ctx, srcRoot, dst); err != nil {
-				return fmt.Errorf("apply file %q: %w", srcRoot, err)
-			}
+		if !info.IsDir() {
+			log.Warn().
+				Str("template", srcRoot).
+				Msgf("template must be a directory, skipping")
+			continue
 		}
+
+		if err := e.applyDir(ctx, m, srcRoot, currentOutputResolver, tracker); err != nil {
+			return fmt.Errorf("apply dir %q: %w", srcRoot, err)
+		}
+	}
+
+	// write lock file
+	if err := tracker.WriteLock(); err != nil {
+		log.Error().Err(err).Msg("failed to write lock file")
+		return err
 	}
 
 	return nil
 }
 
-func (e *Engine) applyDir(ctx context.Context, srcDir, dstDir string) error {
+// isFileExcluded checks if the given path matches any of the exclude patterns.
+func isFileExcluded(path string, excludes []string) bool {
+	for _, pattern := range excludes {
+		matched, err := filepath.Match(pattern, filepath.Base(path))
+		if err == nil && matched {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Engine) applyDir(
+	ctx context.Context,
+	m *Manifest,
+	srcDir string,
+	dstDirResolver *GenericPathResolver,
+	tracker *Tracker,
+) error {
 	return filepath.WalkDir(srcDir, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr // propagate the error
 		}
 		if d.IsDir() {
 			return nil // skip directories as we only care about files and parents are created as needed
+		}
+
+		if isFileExcluded(path, m.Exclusions) {
+			log.Info().Msgf("skipping excluded file: %q", path)
+			return nil
 		}
 
 		info, err := d.Info()
@@ -129,11 +172,14 @@ func (e *Engine) applyDir(ctx context.Context, srcDir, dstDir string) error {
 			return fmt.Errorf("rel %q: %w", path, err)
 		}
 
-		dst := filepath.Join(dstDir, rel)
-		return e.applyFile(ctx, path, dst)
+		dst, err := dstDirResolver.Resolve(rel)
+		if err != nil {
+			return fmt.Errorf("resolve dst %q: %w", rel, err)
+		}
+		return e.applyFile(ctx, path, dst, tracker)
 	})
 }
 
-func (e *Engine) applyFile(ctx context.Context, src, dst string) error {
-	return e.registry.For(src).Apply(ctx, src, dst, e.tracker)
+func (e *Engine) applyFile(ctx context.Context, src, dst string, tracker *Tracker) error {
+	return e.registry.For(src).Apply(ctx, src, dst, tracker)
 }

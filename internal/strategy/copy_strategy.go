@@ -23,7 +23,7 @@ func (s *CopyOnlyStrategy) Name() string {
 }
 
 func (s *CopyOnlyStrategy) Apply(ctx context.Context, src, dst string, tr trackerApplier) error {
-	log.Debug().Msgf("copy-only %q to %q...", src, dst)
+	log.Info().Msgf("[copy-only] copying %q to: %q...", filepath.Base(src), dst)
 
 	// Best-effort context check, no I/O cancellation
 	select {

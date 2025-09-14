@@ -144,7 +144,7 @@ func initLogging() {
 
 	if zerolog.GlobalLevel() == zerolog.DebugLevel {
 		log.Logger = log.Logger.With().
-			Caller().
+			// Caller().
 			Logger()
 	}
 
