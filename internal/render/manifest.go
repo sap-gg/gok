@@ -11,18 +11,64 @@ import (
 
 const ManifestVersion = 1
 
+type Values map[string]any
+
 // Manifest represents the structure of the manifest file used to define rendering targets and their associated templates.
 type Manifest struct {
-	Version    int                        `yaml:"version"`
-	Targets    map[string]*ManifestTarget `yaml:"targets"`
-	Exclusions []string                   `yaml:"exclude"`
+	// Version indicates the version of the manifest format.
+	// Currently, only version 1 is supported.
+	Version int `yaml:"version"`
+
+	// Globals are some global values that can be applied to all templates.
+	// This is optional and can be omitted.
+	Globals *GlobalSpec `yaml:"globals"`
+
+	// Targets is a map of target names to their corresponding ManifestTarget definitions.
+	Targets map[string]*ManifestTarget `yaml:"targets"`
 }
 
 // ManifestTarget represents a single rendering target, including its output path and the list of templates to be applied.
 type ManifestTarget struct {
-	ID        string   `yaml:"-"`
-	Output    string   `yaml:"output"`
-	Templates []string `yaml:"templates"`
+	// ID is an internal identifier, not part of the YAML manifest. It will be copied from the map key.
+	ID string `yaml:"-"`
+
+	// Tags are optional labels that can be used to categorize or filter targets.
+	Tags []string
+
+	// Output is the path where the rendered output will be saved.
+	// Note that this does not mean file system where the output should be written to,
+	// but rather a path inside the target "tarball" / output structure.
+	Output string `yaml:"output"`
+
+	// Templates is a list of templates to be applied for this target.
+	// They will be applied from first to last, with later templates potentially overriding values from earlier ones.
+	// Meaning that the last template has the highest precedence.
+	Templates []*TemplateSpec `yaml:"templates"`
+
+	// Values are additional values with a scope limited to this target.
+	Values Values `yaml:"values"`
+}
+
+// TemplateSpec represents a single template specification, including the path to the template file.
+type TemplateSpec struct {
+	// The Path to the template, **relative to the manifest file**.
+	Path string `yaml:"from"`
+
+	// Values are additional values with a scope limited to this template.
+	Values Values `yaml:"values"`
+}
+
+// GlobalSpec represents global values that can be applied to all templates in the manifest.
+type GlobalSpec struct {
+	// Values are global values available to all templates.
+	Values Values
+}
+
+func (t *TemplateSpec) Validate() error {
+	if t.Path == "" {
+		return fmt.Errorf("template path is required")
+	}
+	return nil
 }
 
 // Validate checks if the ManifestTarget has all required fields properly set.
@@ -34,8 +80,8 @@ func (t *ManifestTarget) Validate() error {
 		return fmt.Errorf("at least one template is required")
 	}
 	for i, tmpl := range t.Templates {
-		if tmpl == "" {
-			return fmt.Errorf("template[%d]: path cannot be empty", i+1)
+		if err := tmpl.Validate(); err != nil {
+			return fmt.Errorf("template[%d]: %w", i+1, err)
 		}
 	}
 	return nil
@@ -77,24 +123,46 @@ func ReadManifest(ctx context.Context, path string) (*Manifest, string, error) {
 }
 
 // SelectTargets selects and returns the manifest targets based on the provided flags.
-func SelectTargets(m *Manifest, all bool, names []string) ([]*ManifestTarget, error) {
-	if all && len(names) > 0 {
-		return nil, fmt.Errorf("cannot specify both all targets and specific target names")
-	}
-
-	var out []*ManifestTarget
+func SelectTargets(m *Manifest, all bool, names, tags []string) ([]*ManifestTarget, error) {
 	if all {
+		out := make([]*ManifestTarget, 0, len(m.Targets))
 		for _, t := range m.Targets {
 			out = append(out, t)
 		}
 		return out, nil
 	}
 
+	targetSet := make(map[*ManifestTarget]struct{})
+	var targetOrder []*ManifestTarget
+
+	// first add by name
 	for _, name := range names {
 		t, ok := m.Targets[name]
 		if !ok {
 			return nil, fmt.Errorf("target %q not found in manifest", name)
 		}
+		if _, exists := targetSet[t]; !exists {
+			targetOrder = append(targetOrder, t)
+			targetSet[t] = struct{}{}
+		}
+	}
+
+	// then add by tags
+	for _, tag := range tags {
+		for _, t := range m.Targets {
+			for _, ttag := range t.Tags {
+				if ttag == tag {
+					if _, exists := targetSet[t]; !exists {
+						targetOrder = append(targetOrder, t)
+						targetSet[t] = struct{}{}
+					}
+				}
+			}
+		}
+	}
+
+	out := make([]*ManifestTarget, 0, len(targetOrder))
+	for _, t := range targetOrder {
 		out = append(out, t)
 	}
 

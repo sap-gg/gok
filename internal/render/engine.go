@@ -61,8 +61,6 @@ func (e *Engine) RenderTargets(ctx context.Context, m *Manifest, targets []*Mani
 			log.Info().Msgf("successfully rendered target %s", t.ID)
 		}
 	}
-	// TODO: re-enable lock file writing
-
 	return combined
 }
 
@@ -89,11 +87,11 @@ func (e *Engine) renderOne(ctx context.Context, m *Manifest, t *ManifestTarget) 
 
 	for _, raw := range t.Templates {
 		log.Info().
-			Str("template", raw).
+			Str("template", raw.Path).
 			Msg("processing template")
 
 		// srcRoot is the absolute path to the template source (file or directory)
-		srcRoot, err := e.manifestDirResolver.Resolve(raw)
+		srcRoot, err := e.manifestDirResolver.Resolve(raw.Path)
 		if err != nil {
 			return fmt.Errorf("resolve template input %q: %w", raw, err)
 		}
@@ -114,7 +112,7 @@ func (e *Engine) renderOne(ctx context.Context, m *Manifest, t *ManifestTarget) 
 			continue
 		}
 
-		if err := e.applyDir(ctx, m, srcRoot, currentOutputResolver, tracker); err != nil {
+		if err := e.applyDir(ctx, srcRoot, currentOutputResolver, tracker); err != nil {
 			return fmt.Errorf("apply dir %q: %w", srcRoot, err)
 		}
 	}
@@ -128,20 +126,8 @@ func (e *Engine) renderOne(ctx context.Context, m *Manifest, t *ManifestTarget) 
 	return nil
 }
 
-// isFileExcluded checks if the given path matches any of the exclude patterns.
-func isFileExcluded(path string, excludes []string) bool {
-	for _, pattern := range excludes {
-		matched, err := filepath.Match(pattern, filepath.Base(path))
-		if err == nil && matched {
-			return true
-		}
-	}
-	return false
-}
-
 func (e *Engine) applyDir(
 	ctx context.Context,
-	m *Manifest,
 	srcDir string,
 	dstDirResolver *GenericPathResolver,
 	tracker *Tracker,
@@ -152,11 +138,6 @@ func (e *Engine) applyDir(
 		}
 		if d.IsDir() {
 			return nil // skip directories as we only care about files and parents are created as needed
-		}
-
-		if isFileExcluded(path, m.Exclusions) {
-			log.Info().Msgf("skipping excluded file: %q", path)
-			return nil
 		}
 
 		info, err := d.Info()

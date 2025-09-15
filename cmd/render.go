@@ -15,6 +15,7 @@ import (
 var renderFlags = struct {
 	manifestPath string
 	targets      []string
+	tags         []string
 	allTargets   bool
 	outPath      string
 	noDelete     bool
@@ -48,9 +49,15 @@ var renderCmd = &cobra.Command{
 			return fmt.Errorf("reading manifest: %w", err)
 		}
 
-		targets, err := render.SelectTargets(manifest, renderFlags.allTargets, renderFlags.targets)
+		targets, err := render.SelectTargets(manifest, renderFlags.allTargets, renderFlags.targets, renderFlags.tags)
 		if err != nil {
 			return fmt.Errorf("selecting targets: %w", err)
+		}
+		if len(targets) == 0 {
+			return fmt.Errorf("no targets matched the selection criteria")
+		}
+		for _, t := range targets {
+			log.Info().Msgf("selected render target: %s", t.ID)
 		}
 
 		var workDir string
@@ -112,10 +119,15 @@ func init() {
 
 	renderCmd.Flags().StringSliceVarP(&renderFlags.targets, "targets", "t", []string{},
 		"List of targets to render (comma-separated)")
+	renderCmd.Flags().StringSliceVarP(&renderFlags.tags, "tags", "", []string{},
+		"List of tags to filter targets by (comma-separated)")
 	renderCmd.Flags().BoolVarP(&renderFlags.allTargets, "all-targets", "A", false,
 		"Render all targets defined in the manifest")
+
+	// either -t <target> OR -t <target> --tag <tag> OR --tag <tag> OR -A
 	renderCmd.MarkFlagsMutuallyExclusive("targets", "all-targets")
-	renderCmd.MarkFlagsOneRequired("targets", "all-targets")
+	renderCmd.MarkFlagsMutuallyExclusive("tags", "all-targets")
+	renderCmd.MarkFlagsOneRequired("targets", "tags", "all-targets")
 
 	renderCmd.Flags().StringVarP(&renderFlags.outPath, "out", "o", "",
 		"Output path for rendered files (defaults to target-specific paths)")
