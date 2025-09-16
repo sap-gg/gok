@@ -47,26 +47,10 @@ type ManifestTarget struct {
 	Values Values `yaml:"values"`
 }
 
-// TemplateSpec represents a single template specification, including the path to the template file.
-type TemplateSpec struct {
-	// The Path to the template, **relative to the manifest file**.
-	Path string `yaml:"from"`
-
-	// Values are additional values with a scope limited to this template.
-	Values Values `yaml:"values"`
-}
-
 // GlobalSpec represents global values that can be applied to all templates in the manifest.
 type GlobalSpec struct {
 	// Values are global values available to all templates.
 	Values Values
-}
-
-func (t *TemplateSpec) Validate() error {
-	if t.Path == "" {
-		return fmt.Errorf("template path is required")
-	}
-	return nil
 }
 
 // Validate checks if the ManifestTarget has all required fields properly set.

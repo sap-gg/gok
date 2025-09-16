@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -50,6 +51,18 @@ func NewTracker(resolver PathResolver) *Tracker {
 // Record marks the specified path as created / modified.
 func (tr *Tracker) Record(absPath string) {
 	tr.affected[filepath.Clean(absPath)] = struct{}{}
+}
+
+// Remove marks the specified path or directory as removed.
+// If a directory is specified, all files under that directory are considered removed.
+func (tr *Tracker) Remove(absPathOrDir string) {
+	absPathOrDir = filepath.Clean(absPathOrDir)
+	for p := range tr.affected {
+		if p == absPathOrDir || strings.HasPrefix(p, absPathOrDir+string(os.PathSeparator)) {
+			log.Debug().Msgf("removing tracked path because it got deleted via gok-deletions.yaml: %q", p)
+			delete(tr.affected, p)
+		}
+	}
 }
 
 // AffectedAbsolutePaths returns a stable, sorted list of affected absolute paths

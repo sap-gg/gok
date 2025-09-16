@@ -12,6 +12,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const (
+	ManifestFileName = "gok-manifest.yaml"
+)
+
 var renderFlags = struct {
 	manifestPath string
 	targets      []string
@@ -117,9 +121,8 @@ var renderCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(renderCmd)
 
-	renderCmd.Flags().StringVarP(&renderFlags.manifestPath, "manifest", "m", "",
+	renderCmd.Flags().StringVarP(&renderFlags.manifestPath, "manifest", "m", ManifestFileName,
 		"Path to the manifest file")
-	_ = renderCmd.MarkFlagRequired("manifest")
 
 	renderCmd.Flags().StringSliceVarP(&renderFlags.targets, "targets", "t", []string{},
 		"List of targets to render (comma-separated)")

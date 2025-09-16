@@ -6,13 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
 
 	"github.com/rs/zerolog/log"
+	"github.com/sap-gg/gok/internal"
 	"github.com/sap-gg/gok/internal/strategy"
+)
+
+const (
+	DeletionFileName = "gok-deletions.yaml"
 )
 
 // Engine performs the rendering for manifest targets
@@ -31,8 +37,14 @@ type Engine struct {
 
 // NewEngine creates a new rendering engine. All parameters are required.
 func NewEngine(manifestDir, workDir string, registry *strategy.Registry) (*Engine, error) {
-	if manifestDir == "" || workDir == "" || registry == nil {
-		return nil, fmt.Errorf("invalid engine config")
+	if manifestDir == "" {
+		return nil, fmt.Errorf("manifest dir is required")
+	}
+	if workDir == "" {
+		return nil, fmt.Errorf("work dir is required")
+	}
+	if registry == nil {
+		return nil, fmt.Errorf("strategy registry is required")
 	}
 
 	manifestDirResolver, err := NewGenericPathResolver(manifestDir)
@@ -57,34 +69,39 @@ func NewEngine(manifestDir, workDir string, registry *strategy.Registry) (*Engin
 	}, nil
 }
 
-func (e *Engine) RenderTargets(ctx context.Context, m *Manifest, targets []*ManifestTarget) error {
-	allValues := PreprocessValues(m)
+// RenderTargets renders the specified targets from the manifest.
+// It continues rendering other targets even if one fails, and returns a combined error.
+func (e *Engine) RenderTargets(ctx context.Context, manifest *Manifest, targets []*ManifestTarget) error {
+	// Pre-calculate the complete values map for cross-target value access
+	allValues := PreprocessValues(manifest)
 
 	var combined error
-	for _, t := range targets {
-		if err := e.renderOne(ctx, m, t, allValues); err != nil {
-			log.Error().Err(err).Msgf("failed to render target %s", t.ID)
-			combined = errors.Join(combined, fmt.Errorf("target %s: %w", t.ID, err))
+	for _, target := range targets {
+		if err := e.RenderTarget(ctx, manifest, target, allValues); err != nil {
+			log.Error().Err(err).Msgf("failed to render target %s", target.ID)
+			combined = errors.Join(combined, fmt.Errorf("target %s: %w", target.ID, err))
 		} else {
-			log.Info().Msgf("successfully rendered target %s", t.ID)
+			log.Info().Msgf("successfully rendered target %s", target.ID)
 		}
 	}
 	return combined
 }
 
-func (e *Engine) renderOne(ctx context.Context, m *Manifest, t *ManifestTarget, allValues ScopedValues) error {
-	// construct the output directory. for example if the `-o test` flag is specified and the manifest.yaml
-	// lies in /home/user/manifest.yaml and the target output is `out`, then
-	// the final output directory is /home/user/test/out
-	outputDir, err := e.workDirResolver.Resolve(t.Output)
+// RenderTarget renders a single target from the manifest.
+func (e *Engine) RenderTarget(
+	ctx context.Context,
+	manifest *Manifest,
+	target *ManifestTarget,
+	allValues ScopedValues,
+) error {
+	outputDir, err := e.workDirResolver.Resolve(target.Output)
 	if err != nil {
-		return fmt.Errorf("resolve output dir %q: %w", t.Output, err)
+		return fmt.Errorf("resolve output dir %q: %w", target.Output, err)
 	}
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return fmt.Errorf("create output dir %q: %w", outputDir, err)
 	}
-
-	log.Info().Msgf("prepared output directory for %s: %q", t.ID, outputDir)
+	log.Debug().Msgf("prepared output directory for %s: %q", target.ID, outputDir)
 
 	currentOutputResolver, err := NewGenericPathResolver(outputDir)
 	if err != nil {
@@ -93,34 +110,22 @@ func (e *Engine) renderOne(ctx context.Context, m *Manifest, t *ManifestTarget, 
 
 	tracker := NewTracker(currentOutputResolver)
 
-	for _, templateSpec := range t.Templates {
-		l := log.With().Str("template", templateSpec.Path).Logger()
-		l.Info().Msg("processing template")
+	// visited contains a list of all visited template absolute paths, to prevent
+	// templates to run twice (if single: true for the template spec)
+	var visited []string
 
-		// create context for template with all relevant values
-		templateData := NewTemplateData(allValues, m.Globals, t, templateSpec)
-
-		// srcRoot is the absolute path to the template source (file or directory)
-		srcRoot, err := e.manifestDirResolver.Resolve(templateSpec.Path)
-		if err != nil {
-			return fmt.Errorf("resolve template input %q: %w", templateSpec, err)
-		}
-
-		info, err := os.Stat(srcRoot)
-		if err != nil {
-			l.Warn().
-				Err(err).
-				Msg("template path not accessible")
-			return fmt.Errorf("stat template input %q: %w", srcRoot, err)
-		}
-
-		if !info.IsDir() {
-			l.Warn().Msgf("template must be a directory, skipping")
-			continue
-		}
-
-		if err := e.applyDir(ctx, srcRoot, currentOutputResolver, tracker, templateData); err != nil {
-			return fmt.Errorf("apply dir %q: %w", srcRoot, err)
+	for _, templateSpec := range target.Templates {
+		if err := e.applyTemplateTree(ctx,
+			manifest,
+			target,
+			templateSpec,
+			allValues,
+			currentOutputResolver,
+			tracker,
+			[]string{},
+			&visited,
+		); err != nil {
+			return fmt.Errorf("processing template spec %q: %w", templateSpec.Path, err)
 		}
 	}
 
@@ -128,6 +133,192 @@ func (e *Engine) renderOne(ctx context.Context, m *Manifest, t *ManifestTarget, 
 	if err := tracker.WriteLock(); err != nil {
 		log.Error().Err(err).Msg("failed to write lock file")
 		return err
+	}
+
+	return nil
+}
+
+func (e *Engine) applyTemplateTree(
+	ctx context.Context,
+	manifest *Manifest,
+	target *ManifestTarget,
+	templateSpec *TemplateSpec,
+	allValues ScopedValues,
+	currentOutputResolver *GenericPathResolver,
+	tracker *Tracker,
+	inheritancePath []string,
+	visited *[]string,
+) error {
+	// srcRoot is the absolute path to the template source (file or directory)
+	srcRoot, err := e.manifestDirResolver.Resolve(templateSpec.Path)
+	if err != nil {
+		return fmt.Errorf("resolve template input %q: %w", templateSpec.Path, err)
+	}
+
+	// for cycle detection
+	newInheritancePath := append(inheritancePath, srcRoot)
+
+	// also track visited templates
+	*visited = append(*visited, srcRoot)
+
+	// cycle detection: check if the current absolute path is already in our inheritance chain
+	for _, p := range inheritancePath {
+		if p == srcRoot {
+			log.Warn().Msg("template inheritance cycle detected:")
+			log.Warn().Msgf(" - %s", strings.Join(newInheritancePath, " -> "))
+			return fmt.Errorf("template inheritance cycle detected")
+		}
+	}
+
+	l := log.With().Str("template", templateSpec.Path).Logger()
+
+	templateManifest, err := ReadTemplateManifest(ctx, srcRoot)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("read template manifest in %q: %w", srcRoot, err)
+		}
+		// it's okay if there's no manifest
+		l.Debug().Msg("no template manifest found, proceeding without")
+	} else {
+		l.Debug().Msg("loaded template manifest")
+	}
+
+	l.Info().Msgf("processing template %s", templateManifest.NameOrDefault(srcRoot))
+
+	if templateManifest != nil {
+		// also print description
+		if templateManifest.Description != "" {
+			log.Info().Msgf(" ? %s", templateManifest.Description)
+		}
+		if len(templateManifest.Maintainers) > 0 {
+			log.Info().Msgf(" ~ maintained by: %s", templateManifest.MaintainerString())
+		}
+
+	inherits:
+		for _, inheritSpec := range templateManifest.Inherits {
+			log.Info().Msgf("-> inheriting from %q", inheritSpec.Path)
+
+			// build the path relative to the current template
+			path := filepath.Join(templateSpec.Path, inheritSpec.Path)
+
+			absPath, err := filepath.Abs(path)
+			if err != nil {
+				return fmt.Errorf("getting absolute path for %q: %w", path, err)
+			}
+
+			logBack := func() {
+				log.Info().Msgf("<- returned from inherited template %q", inheritSpec.Path)
+			}
+
+			// check if the template was already applied (single: true)
+			if inheritSpec.Single {
+				for _, v := range *visited {
+					if v == absPath {
+						log.Info().Msgf("skipping already applied single-use template %q", templateSpec.Path)
+						logBack()
+						continue inherits
+					}
+				}
+			}
+
+			// values are merged: parent spec < inherit spec
+			mergedValues := DeepMerge(templateSpec.Values, inheritSpec.Values)
+			inheritedSpec := &TemplateSpec{
+				Path:   path,
+				Values: mergedValues,
+			}
+			if err := e.applyTemplateTree(ctx,
+				manifest,
+				target,
+				inheritedSpec,
+				allValues,
+				currentOutputResolver,
+				tracker,
+				newInheritancePath,
+				visited,
+			); err != nil {
+				return fmt.Errorf("processing inherit template %q: %w", inheritSpec.Path, err)
+			}
+
+			logBack()
+		}
+	}
+
+	info, err := os.Stat(srcRoot)
+	if err != nil {
+		return fmt.Errorf("stat template input %q: %w", srcRoot, err)
+	}
+	if !info.IsDir() {
+		l.Warn().Msg("template path must be a directory, skipping")
+		return nil
+	}
+
+	templateData := NewTemplateData(allValues, manifest.Globals, target, templateSpec)
+	if err := e.applyDir(ctx, srcRoot, currentOutputResolver, tracker, templateData); err != nil {
+		return fmt.Errorf("apply dir %q: %w", srcRoot, err)
+	}
+
+	// apply deletions
+	if err := e.applyDeletions(ctx, srcRoot, currentOutputResolver, tracker); err != nil {
+		return fmt.Errorf("apply deletions for %q: %w", srcRoot, err)
+	}
+
+	return nil
+}
+
+// Deletion is a deletion entry in the deletions file.
+type Deletion struct {
+	Path      string `yaml:"path"`
+	Recursive bool   `yaml:"recursive,omitempty"`
+}
+
+func (e *Engine) applyDeletions(
+	ctx context.Context,
+	srcRoot string,
+	dstDirResolver *GenericPathResolver,
+	tracker *Tracker,
+) error {
+	deletionsFile := filepath.Join(srcRoot, DeletionFileName)
+
+	f, err := os.Open(deletionsFile)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			// that's fine, no deletions to apply
+			log.Debug().Msgf("no deletions file %q, skipping deletions", deletionsFile)
+			return nil
+		}
+		return fmt.Errorf("open deletions file %q: %w", deletionsFile, err)
+	}
+
+	var deletions []*Deletion
+	if err := internal.NewYAMLDecoder(f).DecodeContext(ctx, &deletions); err != nil {
+		return fmt.Errorf("decode deletions file %q: %w", deletionsFile, err)
+	}
+
+	log.Info().Msgf("applying %d deletions from %q...", len(deletions), DeletionFileName)
+	for _, deletion := range deletions {
+		absPath, err := dstDirResolver.Resolve(deletion.Path)
+		if err != nil {
+			log.Warn().Err(err).Msgf("could not resolve deletion path %q", deletion.Path)
+			continue
+		}
+		if deletion.Recursive {
+			err = os.RemoveAll(absPath)
+		} else {
+			err = os.Remove(absPath)
+		}
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				log.Warn().Msgf("file to delete does not exist, skipping: %q", absPath)
+			} else {
+				log.Warn().Err(err).Msgf("failed to delete path %q", absPath)
+			}
+		} else {
+			log.Info().Msgf("deleted path %q", absPath)
+
+			// remove from tracker as well
+			tracker.Remove(absPath)
+		}
 	}
 
 	return nil
@@ -144,6 +335,13 @@ func (e *Engine) applyDir(
 		if walkErr != nil {
 			return walkErr // propagate the error
 		}
+
+		// skip any gok-related files
+		baseName := filepath.Base(path)
+		if baseName == DeletionFileName || baseName == TemplateManifestFileName {
+			return nil // skip
+		}
+
 		if d.IsDir() {
 			return nil // skip directories as we only care about files and parents are created as needed
 		}
@@ -208,7 +406,7 @@ func (e *Engine) applyFile(ctx context.Context, src, dst string, tracker *Tracke
 	var strat strategy.FileStrategy
 	if _, err := os.Stat(finalDst); errors.Is(err, os.ErrNotExist) {
 		// first seen: copy the (possibly rendered) content
-		log.Debug().Msgf("destination %q does not exist, using fallback strategy", finalDst)
+		log.Trace().Msgf("destination %q does not exist, using fallback strategy", finalDst)
 		strat = e.registry.Fallback()
 	} else if err != nil {
 		return fmt.Errorf("stat final dst %q: %w", finalDst, err)
@@ -217,9 +415,9 @@ func (e *Engine) applyFile(ctx context.Context, src, dst string, tracker *Tracke
 		strat, ok = e.registry.For(finalDst)
 		if !ok {
 			strat = e.registry.Fallback()
-			log.Debug().Msgf("no specific strategy for %q, using fallback %q", finalDst, strat.Name())
+			log.Trace().Msgf("no specific strategy for %q, using fallback %q", finalDst, strat.Name())
 		} else {
-			log.Debug().Msgf("using strategy %q for %q (by ext)", strat.Name(), finalDst)
+			log.Trace().Msgf("using strategy %q for %q (by ext)", strat.Name(), finalDst)
 		}
 	}
 
