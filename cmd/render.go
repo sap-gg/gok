@@ -7,10 +7,11 @@ import (
 
 	"github.com/goccy/go-yaml"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/cobra"
+
 	"github.com/sap-gg/gok/internal"
 	"github.com/sap-gg/gok/internal/render"
 	"github.com/sap-gg/gok/internal/strategy"
-	"github.com/spf13/cobra"
 )
 
 var renderFlags = struct {

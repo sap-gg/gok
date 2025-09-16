@@ -13,6 +13,7 @@ import (
 	"text/template"
 
 	"github.com/rs/zerolog/log"
+
 	"github.com/sap-gg/gok/internal"
 	"github.com/sap-gg/gok/internal/strategy"
 )
