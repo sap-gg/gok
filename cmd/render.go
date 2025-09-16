@@ -7,13 +7,10 @@ import (
 
 	"github.com/goccy/go-yaml"
 	"github.com/rs/zerolog/log"
+	"github.com/sap-gg/gok/internal"
 	"github.com/sap-gg/gok/internal/render"
 	"github.com/sap-gg/gok/internal/strategy"
 	"github.com/spf13/cobra"
-)
-
-const (
-	ManifestFileName = "gok-manifest.yaml"
 )
 
 var renderFlags = struct {
@@ -28,18 +25,75 @@ var renderFlags = struct {
 
 // renderCmd represents the render command
 var renderCmd = &cobra.Command{
-	Use:   "render",
-	Short: "Render one or more targets from a manifest into a temporary work tree.",
+	Use:   "render -m <manifest> -t <target> ...",
+	Short: "Renders targets from a manifest by applying a series of templates and overlays.",
+
+	Long: `The render command is the core of gok. It processes a manifest file (e.g., ` + internal.ManifestFileName + `)
+to generate a final set of configuration files for one or more defined 'targets'.
+
+A target represents a specific output, like a Minecraft server instance (e.g., 'proxy', 'survival').
+Each target is built by layering 'templates' or 'overlays' in a specified order.
+
+DIRECTORY STRUCTURE
+--------- ---------
+Gok expects a '` + internal.ManifestFileName + `' file as the entry point. The paths to templates and overlays
+specified inside the manifest (using 'from:') are relative to the directory containing the
+manifest file.
+
+Example:
+
+.
+├── ` + internal.ManifestFileName + `
+├── templates/
+│   ├── paper/              (Base template for a Paper server)
+│   │   └── ` + internal.TemplateManifestFileName + `
+│   └── velocity/           (Base template for a Velocity proxy)
+└── overlays/
+    └── survival/           (Specific overrides for the 'survival' server)
+
+TEMPLATES AND INHERITANCE
+--------- --- -----------
+A template is a directory of files. It can optionally contain a '` + internal.TemplateManifestFileName + `' file
+to provide metadata (like a description) or to inherit from another template. Inheritance
+allows you to build complex configurations from smaller, reusable components. For example,
+a 'paper-velocity' template could inherit from a base 'paper' template.
+
+FILE OPERATIONS
+---- ----------
+- Files are copied by default. If a destination file already exists, it is skipped unless
+  '--overwrite' is used.
+- Files ending in '.properties' are merged, not overwritten.
+- Files with a '` + internal.TemplateInfix + `' extension (e.g., 'server` + internal.TemplateInfix + `.properties') are processed by the
+  Go template engine before being written to their final destination (e.g., 'server.properties').
+- A '` + internal.DeletionFileName + `' file within a template directory can be used to explicitly remove files
+  that were added by a previously applied (e.g., inherited) template.
+
+VALUE PRECEDENCE
+----- ----------
+Values are made available to Go template files ('` + internal.TemplateInfix + `'). They are merged with the following
+order of precedence (later values override earlier ones):
+1. Global values (defined in 'globals.values' in the manifest)
+2. Target values (defined in 'targets.<target-id>.values')
+3. Template-specific values (defined in 'targets.<target-id>.templates[n].values')`,
+
 	Example: `
-  # Render a single target
-  gok render -m manifest.yaml -t proxy-1
+  # Render a single target named 'proxy' from the manifest
+  gok render -m ` + internal.ManifestFileName + ` -t proxy
 
-  # Render multiple targets
-  gok render -m manifest.yaml -t proxy-1 -t proxy-2
+  # Render multiple targets by name
+  gok render -m ` + internal.ManifestFileName + ` -t proxy -t survival
 
-  # Render all targets
-  gok render -m manifest.yaml -A
-`,
+  # Render all targets that have the 'production' tag
+  gok render -m ` + internal.ManifestFileName + ` --tags production
+
+  # Render all targets defined in the manifest
+  gok render -m ` + internal.ManifestFileName + ` -A
+
+  # Render to a specific output directory, overwriting it if it exists
+  gok render -m ` + internal.ManifestFileName + ` -A -o ./my-server-output --overwrite
+
+  # Render and keep the temporary directory for debugging
+  gok render -m ` + internal.ManifestFileName + ` -t proxy --no-delete`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 
@@ -121,7 +175,7 @@ var renderCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(renderCmd)
 
-	renderCmd.Flags().StringVarP(&renderFlags.manifestPath, "manifest", "m", ManifestFileName,
+	renderCmd.Flags().StringVarP(&renderFlags.manifestPath, "manifest", "m", internal.ManifestFileName,
 		"Path to the manifest file")
 
 	renderCmd.Flags().StringSliceVarP(&renderFlags.targets, "targets", "t", []string{},

@@ -59,7 +59,8 @@ func (tr *Tracker) Remove(absPathOrDir string) {
 	absPathOrDir = filepath.Clean(absPathOrDir)
 	for p := range tr.affected {
 		if p == absPathOrDir || strings.HasPrefix(p, absPathOrDir+string(os.PathSeparator)) {
-			log.Debug().Msgf("removing tracked path because it got deleted via gok-deletions.yaml: %q", p)
+			log.Debug().Msgf("removing tracked path because it got deleted via %s: %q",
+				internal.DeletionFileName, p)
 			delete(tr.affected, p)
 		}
 	}

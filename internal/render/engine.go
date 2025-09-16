@@ -17,10 +17,6 @@ import (
 	"github.com/sap-gg/gok/internal/strategy"
 )
 
-const (
-	DeletionFileName = "gok-deletions.yaml"
-)
-
 // Engine performs the rendering for manifest targets
 type Engine struct {
 	registry *strategy.Registry
@@ -278,7 +274,7 @@ func (e *Engine) applyDeletions(
 	dstDirResolver *GenericPathResolver,
 	tracker *Tracker,
 ) error {
-	deletionsFile := filepath.Join(srcRoot, DeletionFileName)
+	deletionsFile := filepath.Join(srcRoot, internal.DeletionFileName)
 
 	f, err := os.Open(deletionsFile)
 	if err != nil {
@@ -295,7 +291,7 @@ func (e *Engine) applyDeletions(
 		return fmt.Errorf("decode deletions file %q: %w", deletionsFile, err)
 	}
 
-	log.Info().Msgf("applying %d deletions from %q...", len(deletions), DeletionFileName)
+	log.Info().Msgf("applying %d deletions from %q...", len(deletions), internal.DeletionFileName)
 	for _, deletion := range deletions {
 		absPath, err := dstDirResolver.Resolve(deletion.Path)
 		if err != nil {
@@ -338,7 +334,7 @@ func (e *Engine) applyDir(
 
 		// skip any gok-related files
 		baseName := filepath.Base(path)
-		if baseName == DeletionFileName || baseName == TemplateManifestFileName {
+		if baseName == internal.DeletionFileName || baseName == internal.TemplateManifestFileName {
 			return nil // skip
 		}
 
@@ -374,9 +370,9 @@ func (e *Engine) applyFile(ctx context.Context, src, dst string, tracker *Tracke
 		srcContentReader io.Reader
 	)
 
-	if strings.Contains(filepath.Base(src), ".templ") {
+	if strings.Contains(filepath.Base(src), internal.TemplateInfix) {
 		log.Debug().Msgf("rendering template file %q...", src)
-		finalDst = strings.Replace(dst, ".templ", "", 1)
+		finalDst = strings.Replace(dst, internal.TemplateInfix, "", 1)
 
 		content, err := os.ReadFile(src)
 		if err != nil {

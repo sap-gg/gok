@@ -15,8 +15,6 @@ import (
 	"github.com/sap-gg/gok/internal"
 )
 
-const TemplateManifestFileName = "gok-template.yaml"
-
 // TemplateRenderer is responsible for parsing and executing Go templates.
 // It caches parsed templates for reuse.
 type TemplateRenderer struct {
@@ -121,10 +119,10 @@ type InheritSpec struct {
 	Single bool `yaml:"single"`
 }
 
-// ReadTemplateManifest finds and parses a template.yaml file in a give ndirectory.
+// ReadTemplateManifest finds and parses a template.yaml file in a given directory.
 // If the file does not exist, it returns (nil, fs.ErrNotExist)
 func ReadTemplateManifest(ctx context.Context, dirPath string) (*TemplateManifest, error) {
-	manifestPath := filepath.Join(dirPath, TemplateManifestFileName)
+	manifestPath := filepath.Join(dirPath, internal.TemplateManifestFileName)
 
 	f, err := os.Open(manifestPath)
 	if err != nil {
