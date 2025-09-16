@@ -22,8 +22,8 @@ func (s *CopyOnlyStrategy) Name() string {
 	return "copy-only"
 }
 
-func (s *CopyOnlyStrategy) Apply(ctx context.Context, src, dst string, tr trackerApplier) error {
-	log.Info().Msgf("[copy-only] copying %q to: %q...", filepath.Base(src), dst)
+func (s *CopyOnlyStrategy) Apply(ctx context.Context, srcContent io.Reader, dst string, tr trackerApplier) error {
+	log.Info().Msgf("[copy-only] applying to: %q...", dst)
 
 	// Best-effort context check, no I/O cancellation
 	select {
@@ -38,19 +38,13 @@ func (s *CopyOnlyStrategy) Apply(ctx context.Context, src, dst string, tr tracke
 
 	if _, err := os.Stat(dst); err == nil {
 		if !s.Overwrite {
-			log.Warn().
-				Msgf("destination exists; skipping: %q", dst)
+			log.Warn().Msgf("destination exists; skipping: %q (use --overwrite to overwrite)", dst)
+			return nil
 		}
-		return nil
+		log.Debug().Msgf("destination exists and overwrite is enabled; proceeding: %q", dst)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat dst %q: %w", dst, err)
 	}
-
-	sf, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("open src %q: %w", src, err)
-	}
-	defer sf.Close()
 
 	df, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
@@ -58,7 +52,7 @@ func (s *CopyOnlyStrategy) Apply(ctx context.Context, src, dst string, tr tracke
 	}
 	defer df.Close()
 
-	if _, err := io.Copy(df, sf); err != nil {
+	if _, err := io.Copy(df, srcContent); err != nil {
 		return fmt.Errorf("copy to %q: %w", dst, err)
 	}
 

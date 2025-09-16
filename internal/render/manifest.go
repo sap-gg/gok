@@ -11,8 +11,6 @@ import (
 
 const ManifestVersion = 1
 
-type Values map[string]any
-
 // Manifest represents the structure of the manifest file used to define rendering targets and their associated templates.
 type Manifest struct {
 	// Version indicates the version of the manifest format.
@@ -132,7 +130,7 @@ func SelectTargets(m *Manifest, all bool, names, tags []string) ([]*ManifestTarg
 		return out, nil
 	}
 
-	targetSet := make(map[*ManifestTarget]struct{})
+	targetSet := make(map[string]*ManifestTarget)
 	var targetOrder []*ManifestTarget
 
 	// first add by name
@@ -141,30 +139,25 @@ func SelectTargets(m *Manifest, all bool, names, tags []string) ([]*ManifestTarg
 		if !ok {
 			return nil, fmt.Errorf("target %q not found in manifest", name)
 		}
-		if _, exists := targetSet[t]; !exists {
+		if _, exists := targetSet[t.ID]; !exists {
 			targetOrder = append(targetOrder, t)
-			targetSet[t] = struct{}{}
+			targetSet[t.ID] = t
 		}
 	}
 
 	// then add by tags
 	for _, tag := range tags {
-		for _, t := range m.Targets {
+		for id, t := range m.Targets {
 			for _, ttag := range t.Tags {
 				if ttag == tag {
-					if _, exists := targetSet[t]; !exists {
+					if _, exists := targetSet[id]; !exists {
 						targetOrder = append(targetOrder, t)
-						targetSet[t] = struct{}{}
+						targetSet[id] = t
 					}
 				}
 			}
 		}
 	}
 
-	out := make([]*ManifestTarget, 0, len(targetOrder))
-	for _, t := range targetOrder {
-		out = append(out, t)
-	}
-
-	return out, nil
+	return targetOrder, nil
 }

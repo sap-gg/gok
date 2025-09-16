@@ -3,6 +3,7 @@ package strategy
 import (
 	"context"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 )
@@ -13,14 +14,14 @@ type trackerApplier interface {
 	Record(path string)
 }
 
-// FileStrategy defines how to apply a single source file onto a destination path.
+// FileStrategy defines how to apply source content onto a destination path.
 type FileStrategy interface {
 	// Name returns a human-friendly strategy name for logging/metrics.
 	Name() string
 
-	// Apply copies/merges src -> dst and reports whether dst was created or modified.
-	// MUST record changes via Tracker to generate the lock-file later.
-	Apply(ctx context.Context, src, dst string, tr trackerApplier) error
+	// Apply takes content from the srcContent reader, applies it to the dst path,
+	// and reports whether dst was created or modified via the tracker.
+	Apply(ctx context.Context, srcContent io.Reader, dst string, tr trackerApplier) error
 }
 
 // Registry maps file extensions to strategies.
@@ -32,6 +33,9 @@ type Registry struct {
 
 // NewRegistry constructs a registry.
 func NewRegistry(fallback FileStrategy, mappings map[string]FileStrategy) (*Registry, error) {
+	if fallback == nil {
+		return nil, fmt.Errorf("fallback strategy cannot be nil")
+	}
 	byExt := make(map[string]FileStrategy)
 	for ext, s := range mappings {
 		ext = strings.ToLower(strings.TrimSpace(ext))

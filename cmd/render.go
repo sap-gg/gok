@@ -68,11 +68,15 @@ var renderCmd = &cobra.Command{
 			if _, err := os.Stat(workDir); err == nil {
 				return fmt.Errorf("output path %q already exists", workDir)
 			}
+
+			log.Debug().Str("dir", workDir).Msg("using specified output directory")
 		} else {
-			workDir, err := os.MkdirTemp("", "gok-workdir-")
+			tmp, err := os.MkdirTemp("", "gok-workdir-")
 			if err != nil {
 				return fmt.Errorf("creating working directory: %w", err)
 			}
+			workDir = tmp
+
 			log.Debug().Str("dir", workDir).Msg("created temporary directory")
 		}
 

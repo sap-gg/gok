@@ -3,6 +3,7 @@ package strategy
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -19,8 +20,13 @@ func (s *PropertiesPatchStrategy) Name() string {
 	return "properties-patch"
 }
 
-func (s *PropertiesPatchStrategy) Apply(ctx context.Context, src, dst string, tr trackerApplier) error {
-	log.Info().Msgf("[properties-patch] merging %q into %q", filepath.Base(src), dst)
+func (s *PropertiesPatchStrategy) Apply(
+	ctx context.Context,
+	srcContent io.Reader,
+	dst string,
+	tr trackerApplier,
+) error {
+	log.Info().Msgf("[properties-patch] merging into %q", dst)
 
 	// Best-effort context check, no I/O cancellation
 	select {
@@ -29,27 +35,40 @@ func (s *PropertiesPatchStrategy) Apply(ctx context.Context, src, dst string, tr
 	default:
 	}
 
-	source, err := properties.LoadFile(src, properties.UTF8)
+	source, err := properties.LoadReader(srcContent, properties.UTF8)
 	if err != nil {
-		return fmt.Errorf("load source properties file: %w", err)
+		return fmt.Errorf("load source properties: %w", err)
 	}
 
+	// Ensure the destination directory exists
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return fmt.Errorf("mkdir for dst %q: %w", dst, err)
+	}
+
+	// Load target properties; it's okay if it doesn't exist
 	target, err := properties.LoadFile(dst, properties.UTF8)
 	if err != nil {
-		return fmt.Errorf("load target properties file: %w", err)
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("load target properties file %q: %w", dst, err)
+		}
+		// If the file doesn't exist, start with an empty set
+		target = properties.NewProperties()
 	}
 
+	// Merge the new properties into the existing ones
 	target.Merge(source)
 
+	// Write the merged properties back to the destination
 	df, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
-		return fmt.Errorf("create dst %q: %w", dst, err)
+		return fmt.Errorf("create/truncate dst %q: %w", dst, err)
 	}
 	defer df.Close()
 
 	if _, err := target.Write(df, properties.UTF8); err != nil {
-		return fmt.Errorf("merging properties: %w", err)
+		return fmt.Errorf("writing merged properties to %q: %w", dst, err)
 	}
 
+	tr.Record(dst)
 	return nil
 }

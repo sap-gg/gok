@@ -1,11 +1,15 @@
 package render
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"text/template"
 
 	"github.com/rs/zerolog/log"
 	"github.com/sap-gg/gok/internal/strategy"
@@ -14,6 +18,7 @@ import (
 // Engine performs the rendering for manifest targets
 type Engine struct {
 	registry *strategy.Registry
+	renderer *TemplateRenderer
 
 	// manifestDir is the directory of the manifest.yaml
 	manifestDir         string
@@ -42,6 +47,7 @@ func NewEngine(manifestDir, workDir string, registry *strategy.Registry) (*Engin
 
 	return &Engine{
 		registry: registry,
+		renderer: NewTemplateRenderer(),
 
 		manifestDir:         manifestDir,
 		manifestDirResolver: manifestDirResolver,
@@ -52,9 +58,11 @@ func NewEngine(manifestDir, workDir string, registry *strategy.Registry) (*Engin
 }
 
 func (e *Engine) RenderTargets(ctx context.Context, m *Manifest, targets []*ManifestTarget) error {
+	allValues := PreprocessValues(m)
+
 	var combined error
 	for _, t := range targets {
-		if err := e.renderOne(ctx, m, t); err != nil {
+		if err := e.renderOne(ctx, m, t, allValues); err != nil {
 			log.Error().Err(err).Msgf("failed to render target %s", t.ID)
 			combined = errors.Join(combined, fmt.Errorf("target %s: %w", t.ID, err))
 		} else {
@@ -64,7 +72,7 @@ func (e *Engine) RenderTargets(ctx context.Context, m *Manifest, targets []*Mani
 	return combined
 }
 
-func (e *Engine) renderOne(ctx context.Context, m *Manifest, t *ManifestTarget) error {
+func (e *Engine) renderOne(ctx context.Context, m *Manifest, t *ManifestTarget, allValues ScopedValues) error {
 	// construct the output directory. for example if the `-o test` flag is specified and the manifest.yaml
 	// lies in /home/user/manifest.yaml and the target output is `out`, then
 	// the final output directory is /home/user/test/out
@@ -85,34 +93,33 @@ func (e *Engine) renderOne(ctx context.Context, m *Manifest, t *ManifestTarget) 
 
 	tracker := NewTracker(currentOutputResolver)
 
-	for _, raw := range t.Templates {
-		log.Info().
-			Str("template", raw.Path).
-			Msg("processing template")
+	for _, templateSpec := range t.Templates {
+		l := log.With().Str("template", templateSpec.Path).Logger()
+		l.Info().Msg("processing template")
+
+		// create context for template with all relevant values
+		templateData := NewTemplateData(allValues, m.Globals, t, templateSpec)
 
 		// srcRoot is the absolute path to the template source (file or directory)
-		srcRoot, err := e.manifestDirResolver.Resolve(raw.Path)
+		srcRoot, err := e.manifestDirResolver.Resolve(templateSpec.Path)
 		if err != nil {
-			return fmt.Errorf("resolve template input %q: %w", raw, err)
+			return fmt.Errorf("resolve template input %q: %w", templateSpec, err)
 		}
 
 		info, err := os.Stat(srcRoot)
 		if err != nil {
-			log.Warn().
+			l.Warn().
 				Err(err).
-				Str("template", srcRoot).
 				Msg("template path not accessible")
 			return fmt.Errorf("stat template input %q: %w", srcRoot, err)
 		}
 
 		if !info.IsDir() {
-			log.Warn().
-				Str("template", srcRoot).
-				Msgf("template must be a directory, skipping")
+			l.Warn().Msgf("template must be a directory, skipping")
 			continue
 		}
 
-		if err := e.applyDir(ctx, srcRoot, currentOutputResolver, tracker); err != nil {
+		if err := e.applyDir(ctx, srcRoot, currentOutputResolver, tracker, templateData); err != nil {
 			return fmt.Errorf("apply dir %q: %w", srcRoot, err)
 		}
 	}
@@ -131,6 +138,7 @@ func (e *Engine) applyDir(
 	srcDir string,
 	dstDirResolver *GenericPathResolver,
 	tracker *Tracker,
+	data *TemplateData,
 ) error {
 	return filepath.WalkDir(srcDir, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -157,24 +165,63 @@ func (e *Engine) applyDir(
 		if err != nil {
 			return fmt.Errorf("resolve dst %q: %w", rel, err)
 		}
-		return e.applyFile(ctx, path, dst, tracker)
+
+		return e.applyFile(ctx, path, dst, tracker, data)
 	})
 }
 
-func (e *Engine) applyFile(ctx context.Context, src, dst string, tracker *Tracker) error {
-	var strat strategy.FileStrategy
+func (e *Engine) applyFile(ctx context.Context, src, dst string, tracker *Tracker, data *TemplateData) error {
+	var (
+		finalDst         = dst
+		srcContentReader io.Reader
+	)
 
-	// if the destination file does not already exist, use the fallback strategy
-	if _, err := os.Stat(dst); errors.Is(err, os.ErrNotExist) {
-		log.Debug().Msgf("destination %q does not exist, using fallback strategy", dst)
+	if strings.Contains(filepath.Base(src), ".templ") {
+		log.Debug().Msgf("rendering template file %q...", src)
+		finalDst = strings.Replace(dst, ".templ", "", 1)
+
+		content, err := os.ReadFile(src)
+		if err != nil {
+			return fmt.Errorf("read template file %q: %w", src, err)
+		}
+
+		var renderedContent bytes.Buffer
+		if err := e.renderer.Render(&renderedContent, string(content), data); err != nil {
+			var execError template.ExecError
+			if errors.As(err, &execError) {
+				// TODO(future): pretty print
+				log.Warn().Err(err).Msgf("template execution error")
+			}
+			return fmt.Errorf("render template %q: %w", src, err)
+		}
+
+		srcContentReader = &renderedContent
+	} else {
+		sf, err := os.Open(src)
+		if err != nil {
+			return fmt.Errorf("open src %q: %w", src, err)
+		}
+		defer sf.Close()
+		srcContentReader = sf
+	}
+
+	var strat strategy.FileStrategy
+	if _, err := os.Stat(finalDst); errors.Is(err, os.ErrNotExist) {
+		// first seen: copy the (possibly rendered) content
+		log.Debug().Msgf("destination %q does not exist, using fallback strategy", finalDst)
 		strat = e.registry.Fallback()
+	} else if err != nil {
+		return fmt.Errorf("stat final dst %q: %w", finalDst, err)
 	} else {
 		var ok bool
-		strat, ok = e.registry.For(dst)
-		if ok {
-			log.Debug().Msgf("using strategy %q for %q (by ext)", strat.Name(), dst)
+		strat, ok = e.registry.For(finalDst)
+		if !ok {
+			strat = e.registry.Fallback()
+			log.Debug().Msgf("no specific strategy for %q, using fallback %q", finalDst, strat.Name())
+		} else {
+			log.Debug().Msgf("using strategy %q for %q (by ext)", strat.Name(), finalDst)
 		}
 	}
 
-	return strat.Apply(ctx, src, dst, tracker)
+	return strat.Apply(ctx, srcContentReader, finalDst, tracker)
 }
