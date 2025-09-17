@@ -3,64 +3,22 @@ package render
 import (
 	"context"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
-	"text/template"
-
-	"github.com/rs/zerolog/log"
 
 	"github.com/sap-gg/gok/internal"
 )
 
 const TemplateVersion = 1
 
-// TemplateRenderer is responsible for parsing and executing Go templates.
-// It caches parsed templates for reuse.
-type TemplateRenderer struct {
-	cache sync.Map // map[string]*template.Template
-}
-
-// NewTemplateRenderer creates a new TemplateRenderer.
-func NewTemplateRenderer() *TemplateRenderer {
-	return &TemplateRenderer{}
-}
-
-// Render parses and executes a template with the given data.
-func (r *TemplateRenderer) Render(w io.Writer, content string, data any) error {
-	tmpl, err := r.getTemplate(content)
-	if err != nil {
-		return err
-	}
-	log.Debug().Msgf("rendering content with data: %#v", data)
-	return tmpl.Execute(w, data)
-}
-
-func (r *TemplateRenderer) getTemplate(content string) (*template.Template, error) {
-	if cached, ok := r.cache.Load(content); ok {
-		return cached.(*template.Template), nil
-	}
-
-	tmpl, err := template.New("gok").
-		Option("missingkey=error").
-		Parse(content)
-	if err != nil {
-		return nil, fmt.Errorf("parsing template: %w", err)
-	}
-
-	r.cache.Store(content, tmpl)
-	return tmpl, nil
-}
-
-// TemplateSpec represents a single template specification, including the path to the template file.
+// TemplateSpec represents a single template specification inside the manifest, including the path to the template file.
 type TemplateSpec struct {
-	// The Path to the template, **relative to the manifest file**.
+	// The Path to the template, **relative to the manifest file**
 	Path string `yaml:"from"`
 
-	// Values are additional values with a scope limited to this template.
+	// Values are additional values with a scope limited to this template
 	Values Values `yaml:"values"`
 }
 
@@ -71,15 +29,30 @@ func (t *TemplateSpec) Validate() error {
 	return nil
 }
 
-// TemplateManifest defines the metadata for a template.
+// TemplateManifest defines the structure of a template.yaml file inside a template directory.
 type TemplateManifest struct {
-	Version     int            `yaml:"version"`
-	Name        string         `yaml:"name"`
-	Description string         `yaml:"description"`
-	Maintainers []*Maintainer  `yaml:"maintainers"`
-	Inherits    []*InheritSpec `yaml:"inherits"`
+	// Version of the template manifest format
+	Version int `yaml:"version"`
+
+	// Name of the template. (optional, default is the directory name)
+	Name string `yaml:"name"`
+
+	// Description of the template (optional)
+	Description string `yaml:"description"`
+
+	// Maintainers is a list of maintainers / responsible persons for this template (optional)
+	Maintainers []*Maintainer `yaml:"maintainers"`
+
+	// Inherits is a list of parent templates to inherit from (optional)
+	Inherits []*InheritSpec `yaml:"inherits"`
+
+	// Imports is a list of values to receive from the manifest.
+	// Only values specified here will be passed from the manifest to this template
+	// and can be imported using {{ .values.some_key }}.
+	Imports map[string]*TemplateValueRequirement `yaml:"imports"`
 }
 
+// NameOrDefault returns the template name, or the base name of the given path if the name is not set.
 func (t *TemplateManifest) NameOrDefault(path string) string {
 	if t == nil || t.Name == "" {
 		return filepath.Base(path)
@@ -87,12 +60,25 @@ func (t *TemplateManifest) NameOrDefault(path string) string {
 	return t.Name
 }
 
+// MaintainerString returns a comma-separated string of maintainers.
 func (t *TemplateManifest) MaintainerString() string {
 	ms := make([]string, 0, len(t.Maintainers))
 	for _, m := range t.Maintainers {
 		ms = append(ms, m.String())
 	}
 	return strings.Join(ms, ", ")
+}
+
+// TemplateValueRequirement defines a required value for a template.
+type TemplateValueRequirement struct {
+	// Description of the required value. This may be shown when printing help for a template or when it's missing.
+	Description string
+
+	// Mark this value as required. If a required value is missing, rendering should fail.
+	Required bool
+
+	// Default value if the value is not provided by the manifest and if Required is false.
+	Default any
 }
 
 // Maintainer represents a maintainer / responsible for a template.
@@ -118,7 +104,7 @@ type InheritSpec struct {
 	// Values to pass to the inherited template
 	Values Values `yaml:"values"`
 
-	// Single marks the template to not apply if it was already applied
+	// Single marks the template to not apply if it was already applied before
 	Single bool `yaml:"single"`
 }
 

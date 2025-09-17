@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,12 +17,13 @@ import (
 
 	"github.com/sap-gg/gok/internal"
 	"github.com/sap-gg/gok/internal/strategy"
+	"github.com/sap-gg/gok/internal/templ"
 )
 
 // Engine performs the rendering for manifest targets
 type Engine struct {
 	registry *strategy.Registry
-	renderer *TemplateRenderer
+	renderer *templ.TemplateRenderer
 
 	// manifestDir is the directory of the manifest.yaml
 	manifestDir         string
@@ -33,7 +35,11 @@ type Engine struct {
 }
 
 // NewEngine creates a new rendering engine. All parameters are required.
-func NewEngine(manifestDir, workDir string, registry *strategy.Registry) (*Engine, error) {
+func NewEngine(
+	manifestDir, workDir string,
+	renderer *templ.TemplateRenderer,
+	registry *strategy.Registry,
+) (*Engine, error) {
 	if manifestDir == "" {
 		return nil, fmt.Errorf("manifest dir is required")
 	}
@@ -56,7 +62,7 @@ func NewEngine(manifestDir, workDir string, registry *strategy.Registry) (*Engin
 
 	return &Engine{
 		registry: registry,
-		renderer: NewTemplateRenderer(),
+		renderer: renderer,
 
 		manifestDir:         manifestDir,
 		manifestDirResolver: manifestDirResolver,
@@ -70,11 +76,9 @@ func NewEngine(manifestDir, workDir string, registry *strategy.Registry) (*Engin
 // It continues rendering other targets even if one fails, and returns a combined error.
 func (e *Engine) RenderTargets(ctx context.Context, manifest *Manifest, targets []*ManifestTarget) error {
 	// Pre-calculate the complete values map for cross-target value access
-	allValues := PreprocessValues(manifest)
-
 	var combined error
 	for _, target := range targets {
-		if err := e.RenderTarget(ctx, manifest, target, allValues); err != nil {
+		if err := e.RenderTarget(ctx, manifest, target); err != nil {
 			log.Error().Err(err).Msgf("failed to render target %s", target.ID)
 			combined = errors.Join(combined, fmt.Errorf("target %s: %w", target.ID, err))
 		} else {
@@ -89,8 +93,8 @@ func (e *Engine) RenderTarget(
 	ctx context.Context,
 	manifest *Manifest,
 	target *ManifestTarget,
-	allValues ScopedValues,
 ) error {
+	// create the output directory INSIDE the workDir
 	outputDir, err := e.workDirResolver.Resolve(target.Output)
 	if err != nil {
 		return fmt.Errorf("resolve output dir %q: %w", target.Output, err)
@@ -116,11 +120,11 @@ func (e *Engine) RenderTarget(
 			manifest,
 			target,
 			templateSpec,
-			allValues,
 			currentOutputResolver,
 			tracker,
 			[]string{},
 			&visited,
+			nil, // no previous values
 		); err != nil {
 			return fmt.Errorf("processing template spec %q: %w", templateSpec.Path, err)
 		}
@@ -140,34 +144,31 @@ func (e *Engine) applyTemplateTree(
 	manifest *Manifest,
 	target *ManifestTarget,
 	templateSpec *TemplateSpec,
-	allValues ScopedValues,
 	currentOutputResolver *GenericPathResolver,
 	tracker *Tracker,
 	inheritancePath []string,
 	visited *[]string,
+	previousValues Values, // note that means that any inherited template can use values it has not specified in a template manifest.
 ) error {
+	l := log.With().Str("template", templateSpec.Path).Logger()
+
 	// srcRoot is the absolute path to the template source (file or directory)
 	srcRoot, err := e.manifestDirResolver.Resolve(templateSpec.Path)
 	if err != nil {
 		return fmt.Errorf("resolve template input %q: %w", templateSpec.Path, err)
 	}
 
-	// for cycle detection
+	// for cycle detection and to track visited templates (e.g. for single: true)
 	newInheritancePath := append(inheritancePath, srcRoot)
-
-	// also track visited templates
 	*visited = append(*visited, srcRoot)
-
 	// cycle detection: check if the current absolute path is already in our inheritance chain
 	for _, p := range inheritancePath {
 		if p == srcRoot {
-			log.Warn().Msg("template inheritance cycle detected:")
-			log.Warn().Msgf(" - %s", strings.Join(newInheritancePath, " -> "))
+			l.Warn().Msg("template inheritance cycle detected:")
+			l.Warn().Msgf(" - %s", strings.Join(newInheritancePath, " -> "))
 			return fmt.Errorf("template inheritance cycle detected")
 		}
 	}
-
-	l := log.With().Str("template", templateSpec.Path).Logger()
 
 	templateManifest, err := ReadTemplateManifest(ctx, srcRoot)
 	if err != nil {
@@ -182,6 +183,10 @@ func (e *Engine) applyTemplateTree(
 
 	l.Info().Msgf("processing template %s", templateManifest.NameOrDefault(srcRoot))
 
+	// build the complete values map for this template application
+	values := make(Values)
+	maps.Copy(values, previousValues)
+
 	if templateManifest != nil {
 		// also print description
 		if templateManifest.Description != "" {
@@ -189,6 +194,24 @@ func (e *Engine) applyTemplateTree(
 		}
 		if len(templateManifest.Maintainers) > 0 {
 			log.Info().Msgf(" ~ maintained by: %s", templateManifest.MaintainerString())
+		}
+
+		// select values to load from global -> target -> template
+		for valueName, requirement := range templateManifest.Imports {
+			value, source, found := retrieveValue(valueName, templateSpec, target, manifest)
+			if found {
+				values[valueName] = value
+				log.Debug().Msgf("-> imported value %q from %s", valueName, source)
+				continue
+			}
+			if requirement.Required {
+				log.Error().Msgf("template required value %q not found", valueName)
+				log.Error().Msgf(" ? %s", requirement.Description)
+				return fmt.Errorf("required value %q not found in template, target, or global values", valueName)
+			}
+			values[valueName] = requirement.Default
+			log.Debug().Msgf("-> using default value %q for missing non-required value %q",
+				requirement.Default, valueName)
 		}
 
 	inherits:
@@ -228,11 +251,11 @@ func (e *Engine) applyTemplateTree(
 				manifest,
 				target,
 				inheritedSpec,
-				allValues,
 				currentOutputResolver,
 				tracker,
 				newInheritancePath,
 				visited,
+				values,
 			); err != nil {
 				return fmt.Errorf("processing inherit template %q: %w", inheritSpec.Path, err)
 			}
@@ -250,8 +273,9 @@ func (e *Engine) applyTemplateTree(
 		return nil
 	}
 
-	templateData := NewTemplateData(allValues, manifest.Globals, target, templateSpec)
-	if err := e.applyDir(ctx, srcRoot, currentOutputResolver, tracker, templateData); err != nil {
+	if err := e.applyDir(ctx, srcRoot, currentOutputResolver, tracker, Values{
+		"values": values,
+	}); err != nil {
 		return fmt.Errorf("apply dir %q: %w", srcRoot, err)
 	}
 
@@ -326,7 +350,7 @@ func (e *Engine) applyDir(
 	srcDir string,
 	dstDirResolver *GenericPathResolver,
 	tracker *Tracker,
-	data *TemplateData,
+	data any,
 ) error {
 	return filepath.WalkDir(srcDir, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -365,7 +389,7 @@ func (e *Engine) applyDir(
 	})
 }
 
-func (e *Engine) applyFile(ctx context.Context, src, dst string, tracker *Tracker, data *TemplateData) error {
+func (e *Engine) applyFile(ctx context.Context, src, dst string, tracker *Tracker, data any) error {
 	var (
 		finalDst         = dst
 		srcContentReader io.Reader
@@ -419,4 +443,30 @@ func (e *Engine) applyFile(ctx context.Context, src, dst string, tracker *Tracke
 	}
 
 	return strat.Apply(ctx, srcContentReader, finalDst, tracker)
+}
+
+type valueSource string
+
+const (
+	valueSourceGlobal   valueSource = "global"
+	valueSourceTarget   valueSource = "target"
+	valueSourceTemplate valueSource = "template"
+)
+
+func retrieveValue(
+	name string,
+	templateSpec *TemplateSpec,
+	target *ManifestTarget,
+	manifest *Manifest,
+) (any, valueSource, bool) {
+	if val, ok := templateSpec.Values[name]; ok {
+		return val, valueSourceTemplate, true
+	}
+	if val, ok := target.Values[name]; ok {
+		return val, valueSourceTarget, true
+	}
+	if val, ok := manifest.Values[name]; ok {
+		return val, valueSourceGlobal, true
+	}
+	return nil, "", false
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/sap-gg/gok/internal/archive"
 	"github.com/sap-gg/gok/internal/render"
 	"github.com/sap-gg/gok/internal/strategy"
+	"github.com/sap-gg/gok/internal/templ"
 )
 
 var renderFlags = struct {
@@ -44,6 +45,8 @@ var renderCmd = &cobra.Command{
 				return fmt.Errorf("output path %q already exists", renderFlags.outPath)
 			}
 		}
+
+		renderer := templ.NewTemplateRenderer()
 
 		manifest, manifestDir, err := render.ReadManifest(ctx, renderFlags.manifestPath)
 		if err != nil {
@@ -91,7 +94,7 @@ var renderCmd = &cobra.Command{
 			return fmt.Errorf("creating strategy registry: %w", err)
 		}
 
-		engine, err := render.NewEngine(manifestDir, workDir, registry)
+		engine, err := render.NewEngine(manifestDir, workDir, renderer, registry)
 		if err != nil {
 			return fmt.Errorf("creating render engine: %w", err)
 		}

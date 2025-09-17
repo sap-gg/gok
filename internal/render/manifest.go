@@ -17,9 +17,9 @@ type Manifest struct {
 	// Currently, only version 1 is supported.
 	Version int `yaml:"version"`
 
-	// Globals are some global values that can be applied to all templates.
-	// This is optional and can be omitted.
-	Globals *GlobalSpec `yaml:"globals"`
+	// Values are values that are global to all templates in the manifest.
+	// They may be overwritten by target-specific or template-specific values.
+	Values Values `yaml:"values"`
 
 	// Targets is a map of target names to their corresponding ManifestTarget definitions.
 	Targets map[string]*ManifestTarget `yaml:"targets"`
@@ -36,7 +36,7 @@ type ManifestTarget struct {
 	// Output is the path where the rendered output will be saved.
 	// Note that this does not mean file system where the output should be written to,
 	// but rather a path inside the target "tarball" / output structure.
-	Output string `yaml:"output"`
+	Output string `yaml:"output" validate:"required"`
 
 	// Templates is a list of templates to be applied for this target.
 	// They will be applied from first to last, with later templates potentially overriding values from earlier ones.
@@ -132,8 +132,8 @@ func SelectTargets(m *Manifest, all bool, names, tags []string) ([]*ManifestTarg
 	// then add by tags
 	for _, tag := range tags {
 		for id, t := range m.Targets {
-			for _, ttag := range t.Tags {
-				if ttag == tag {
+			for _, tTag := range t.Tags {
+				if tTag == tag {
 					if _, exists := targetSet[id]; !exists {
 						targetOrder = append(targetOrder, t)
 						targetSet[id] = t
