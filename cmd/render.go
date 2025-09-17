@@ -20,6 +20,7 @@ import (
 
 var renderFlags = struct {
 	manifestPath string
+	valuesFiles  []string // for external value files, merged from left to right
 
 	// target selector flags:
 	targets    []string
@@ -44,6 +45,18 @@ var renderCmd = &cobra.Command{
 			if _, err := os.Stat(renderFlags.outPath); err == nil {
 				return fmt.Errorf("output path %q already exists", renderFlags.outPath)
 			}
+		}
+
+		// load any external values files (-f)
+		// these are merged with increasing precedence (last one wins)
+		externalValues := make(render.Values)
+		for _, valuesPath := range renderFlags.valuesFiles {
+			log.Info().Msgf("loading values from %q", valuesPath)
+			currentValues, err := loadValueFromFile(valuesPath)
+			if err != nil {
+				return err
+			}
+			externalValues = render.DeepMerge(externalValues, currentValues)
 		}
 
 		renderer := templ.NewTemplateRenderer()
@@ -94,7 +107,7 @@ var renderCmd = &cobra.Command{
 			return fmt.Errorf("creating strategy registry: %w", err)
 		}
 
-		engine, err := render.NewEngine(manifestDir, workDir, renderer, registry)
+		engine, err := render.NewEngine(manifestDir, workDir, renderer, registry, externalValues)
 		if err != nil {
 			return fmt.Errorf("creating render engine: %w", err)
 		}
@@ -149,6 +162,8 @@ func init() {
 
 	renderCmd.Flags().StringVarP(&renderFlags.manifestPath, "manifest", "m", internal.ManifestFileName,
 		"Path to the manifest file")
+	renderCmd.Flags().StringSliceVarP(&renderFlags.valuesFiles, "values", "f", []string{},
+		"Additional values files to merge, merged left to right")
 
 	renderCmd.Flags().StringSliceVarP(&renderFlags.targets, "targets", "t", []string{},
 		"List of targets to render (comma-separated)")
@@ -180,6 +195,21 @@ func newStrategyRegistry() (*strategy.Registry, error) {
 			".json":       &strategy.JSONPatchStrategy{},
 			".toml":       &strategy.TOMLPatchStrategy{},
 		})
+}
+
+func loadValueFromFile(path string) (render.Values, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("opening values file %q: %w", path, err)
+	}
+	defer f.Close()
+
+	var values render.Values
+	if err := internal.NewYAMLDecoder(f).Decode(&values); err != nil {
+		return nil, fmt.Errorf("decoding values file %q: %w", path, err)
+	}
+
+	return values, nil
 }
 
 const (
@@ -225,26 +255,18 @@ VALUE PRECEDENCE
 ----- ----------
 Values are made available to Go template files ('` + internal.TemplateInfix + `'). They are merged with the following
 order of precedence (later values override earlier ones):
-1. Global values (defined in 'globals.values' in the manifest)
-2. Target values (defined in 'targets.<target-id>.values')
-3. Template-specific values (defined in 'targets.<target-id>.templates[n].values')`
+1. Global values (from '` + internal.ManifestFileName + `')
+2. External values (from files passed via --values / -f)
+3. Target values (defined in 'targets.<target-id>.values')
+4. Template-specific values (defined in 'targets.<target-id>.templates[n].values')`
 
 	renderExample = `
-  # Render a single target named 'proxy' from the manifest
-  gok render -m ` + internal.ManifestFileName + ` -t proxy
+  # Render a single target
+  gok render -t proxy
 
-  # Render multiple targets by name
-  gok render -m ` + internal.ManifestFileName + ` -t proxy -t survival
-
-  # Render all targets that have the 'production' tag
-  gok render -m ` + internal.ManifestFileName + ` --tags production
-
-  # Render all targets defined in the manifest
-  gok render -m ` + internal.ManifestFileName + ` -A
-
-  # Render to a specific output directory, overwriting it if it exists
-  gok render -m ` + internal.ManifestFileName + ` -A -o my-server-output.tar.gz
-
-  # Render and keep the temporary directory for debugging
-  gok render -m ` + internal.ManifestFileName + ` -t proxy --no-delete`
+  # Render a target using an external values file for environment-specific config
+  gok render -t survival -f survival-prod-values.yaml -o survival.tar.gz
+  
+  # Override values by specifying multiple files (last one wins)
+  gok render -t proxy -f common.yaml -f dev.yaml`
 )

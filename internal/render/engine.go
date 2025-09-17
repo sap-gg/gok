@@ -25,6 +25,8 @@ type Engine struct {
 	registry *strategy.Registry
 	renderer *templ.TemplateRenderer
 
+	externalValues Values
+
 	// manifestDir is the directory of the manifest.yaml
 	manifestDir         string
 	manifestDirResolver *GenericPathResolver
@@ -39,6 +41,7 @@ func NewEngine(
 	manifestDir, workDir string,
 	renderer *templ.TemplateRenderer,
 	registry *strategy.Registry,
+	externalValues Values,
 ) (*Engine, error) {
 	if manifestDir == "" {
 		return nil, fmt.Errorf("manifest dir is required")
@@ -63,6 +66,8 @@ func NewEngine(
 	return &Engine{
 		registry: registry,
 		renderer: renderer,
+
+		externalValues: externalValues,
 
 		manifestDir:         manifestDir,
 		manifestDirResolver: manifestDirResolver,
@@ -198,7 +203,7 @@ func (e *Engine) applyTemplateTree(
 
 		// select values to load from global -> target -> template
 		for valueName, requirement := range templateManifest.Imports {
-			value, source, found := retrieveValue(valueName, templateSpec, target, manifest)
+			value, source, found := retrieveValue(valueName, templateSpec, target, manifest, e.externalValues)
 			if found {
 				values[valueName] = value
 				log.Debug().Msgf("-> imported value %q from %s", valueName, source)
@@ -207,7 +212,7 @@ func (e *Engine) applyTemplateTree(
 			if requirement.Required {
 				log.Error().Msgf("template required value %q not found", valueName)
 				log.Error().Msgf(" ? %s", requirement.Description)
-				return fmt.Errorf("required value %q not found in template, target, or global values", valueName)
+				return fmt.Errorf("required value %q cannot be resolved", valueName)
 			}
 			values[valueName] = requirement.Default
 			log.Debug().Msgf("-> using default value %q for missing non-required value %q",
@@ -456,6 +461,7 @@ type valueSource string
 
 const (
 	valueSourceGlobal   valueSource = "global"
+	valueSourceExternal valueSource = "external"
 	valueSourceTarget   valueSource = "target"
 	valueSourceTemplate valueSource = "template"
 )
@@ -465,13 +471,21 @@ func retrieveValue(
 	templateSpec *TemplateSpec,
 	target *ManifestTarget,
 	manifest *Manifest,
+	externalValues Values,
 ) (any, valueSource, bool) {
+	// highest precedence: template-specific values
 	if val, ok := templateSpec.Values[name]; ok {
 		return val, valueSourceTemplate, true
 	}
+	// next: target specific values
 	if val, ok := target.Values[name]; ok {
 		return val, valueSourceTarget, true
 	}
+	// next: externally provided values (e.g. CLI -set flags)
+	if val, ok := externalValues[name]; ok {
+		return val, valueSourceExternal, true
+	}
+	// last: global manifest values
 	if val, ok := manifest.Values[name]; ok {
 		return val, valueSourceGlobal, true
 	}
