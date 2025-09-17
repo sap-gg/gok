@@ -273,15 +273,15 @@ func (e *Engine) applyTemplateTree(
 		return nil
 	}
 
+	// apply deletions
+	if err := e.applyDeletions(ctx, srcRoot, currentOutputResolver, tracker); err != nil {
+		return fmt.Errorf("apply deletions for %q: %w", srcRoot, err)
+	}
+
 	if err := e.applyDir(ctx, srcRoot, currentOutputResolver, tracker, Values{
 		"values": values,
 	}); err != nil {
 		return fmt.Errorf("apply dir %q: %w", srcRoot, err)
-	}
-
-	// apply deletions
-	if err := e.applyDeletions(ctx, srcRoot, currentOutputResolver, tracker); err != nil {
-		return fmt.Errorf("apply deletions for %q: %w", srcRoot, err)
 	}
 
 	return nil
