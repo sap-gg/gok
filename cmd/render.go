@@ -167,10 +167,19 @@ func init() {
 }
 
 func newStrategyRegistry() (*strategy.Registry, error) {
-	return strategy.NewRegistry(&strategy.CopyOnlyStrategy{}, map[string]strategy.FileStrategy{
-		// *.properties files should be patched, not overwritten
-		".properties": &strategy.PropertiesPatchStrategy{},
-	})
+	return strategy.NewRegistry(
+		// the fallback strategy: copy (or overwrite) files as-is
+		&strategy.CopyOnlyStrategy{
+			Overwrite: true,
+		},
+		map[string]strategy.FileStrategy{
+			// *.properties files should be patched, not overwritten
+			".properties": &strategy.PropertiesPatchStrategy{},
+			".yml":        &strategy.YAMLPatchStrategy{},
+			".yaml":       &strategy.YAMLPatchStrategy{},
+			".json":       &strategy.JSONPatchStrategy{},
+			".toml":       &strategy.TOMLPatchStrategy{},
+		})
 }
 
 const (

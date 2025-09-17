@@ -38,10 +38,10 @@ func (s *CopyOnlyStrategy) Apply(ctx context.Context, srcContent io.Reader, dst 
 
 	if _, err := os.Stat(dst); err == nil {
 		if !s.Overwrite {
-			log.Warn().Msgf("destination exists; skipping: %q (use --overwrite to overwrite)", dst)
+			log.Warn().Msgf("[copy-only] destination exists; skipping: %q (use --overwrite to overwrite)", dst)
 			return nil
 		}
-		log.Debug().Msgf("destination exists and overwrite is enabled; proceeding: %q", dst)
+		log.Info().Msgf("[copy-only] overwriting existing file: %q", dst)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat dst %q: %w", dst, err)
 	}

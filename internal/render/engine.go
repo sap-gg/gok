@@ -278,8 +278,15 @@ func (e *Engine) applyTemplateTree(
 		return fmt.Errorf("apply deletions for %q: %w", srcRoot, err)
 	}
 
+	// manifestValues is considered an unsafe-operation, it should ONLY be used by overlay-templates
+	manifestValues := make(Values)
+	for _, t := range manifest.Targets {
+		manifestValues[t.ID] = t.Values
+	}
+
 	if err := e.applyDir(ctx, srcRoot, currentOutputResolver, tracker, Values{
-		"values": values,
+		"values":          values,
+		"manifest_values": manifestValues,
 	}); err != nil {
 		return fmt.Errorf("apply dir %q: %w", srcRoot, err)
 	}
