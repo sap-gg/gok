@@ -26,6 +26,7 @@ type Engine struct {
 	renderer *templ.TemplateRenderer
 
 	externalValues Values
+	secretData     Values
 
 	// manifestDir is the directory of the manifest.yaml
 	manifestDir         string
@@ -42,6 +43,7 @@ func NewEngine(
 	renderer *templ.TemplateRenderer,
 	registry *strategy.Registry,
 	externalValues Values,
+	secretValues Values,
 ) (*Engine, error) {
 	if manifestDir == "" {
 		return nil, fmt.Errorf("manifest dir is required")
@@ -68,6 +70,7 @@ func NewEngine(
 		renderer: renderer,
 
 		externalValues: externalValues,
+		secretData:     secretValues,
 
 		manifestDir:         manifestDir,
 		manifestDirResolver: manifestDirResolver,
@@ -289,10 +292,14 @@ func (e *Engine) applyTemplateTree(
 		manifestValues[t.ID] = t.Values
 	}
 
-	if err := e.applyDir(ctx, srcRoot, currentOutputResolver, tracker, Values{
-		"imports":         values,
-		"manifest_values": manifestValues,
-	}); err != nil {
+	templateContext := Values{
+		"target":   target,
+		"manifest": manifest,
+		"imports":  values,
+		"secrets":  e.secretData,
+	}
+
+	if err := e.applyDir(ctx, srcRoot, currentOutputResolver, tracker, templateContext); err != nil {
 		return fmt.Errorf("apply dir %q: %w", srcRoot, err)
 	}
 

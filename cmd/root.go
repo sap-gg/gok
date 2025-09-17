@@ -2,15 +2,14 @@ package cmd
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"strings"
-	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+
+	"github.com/sap-gg/gok/internal/logging"
 )
 
 var cfgFile string
@@ -26,7 +25,7 @@ var rootCmd = &cobra.Command{
 	Short: "Landscape Renderer for Minecraft",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		configPath, configErr := initConfig()
-		initLogging()
+		logging.Init(nil)
 		if configErr != nil { // handle error after logging is initialized
 			return configErr
 		}
@@ -102,53 +101,4 @@ func initConfig() (string, error) {
 	}
 
 	return "", nil
-}
-
-func initLogging() {
-	var queue []string
-
-	zerolog.TimeFieldFormat = time.RFC3339Nano
-
-	levelMap := map[string]zerolog.Level{
-		"trace": zerolog.TraceLevel,
-		"debug": zerolog.DebugLevel,
-		"info":  zerolog.InfoLevel,
-		"warn":  zerolog.WarnLevel,
-		"error": zerolog.ErrorLevel,
-	}
-	levelStr := strings.ToLower(viper.GetString(LogLevelKey))
-	level, ok := levelMap[levelStr]
-	if !ok {
-		level = zerolog.InfoLevel
-		queue = append(queue, fmt.Sprintf("unknown log level %q, using info", levelStr))
-	}
-	zerolog.SetGlobalLevel(level)
-
-	format := strings.ToLower(viper.GetString(LogFormatKey))
-	if format == "json" {
-		log.Logger = zerolog.New(os.Stderr).With().
-			Timestamp().
-			Logger()
-	} else {
-		if format != "console" {
-			queue = append(queue, fmt.Sprintf("unknown log format %q, using console", format))
-		}
-		log.Logger = zerolog.New(zerolog.NewConsoleWriter(func(w *zerolog.ConsoleWriter) {
-			w.Out = os.Stderr
-			w.NoColor = viper.GetBool(LogNoColorKey)
-			w.TimeFormat = "15:04:05.000"
-		})).With().
-			Timestamp().
-			Logger()
-	}
-
-	if zerolog.GlobalLevel() == zerolog.DebugLevel {
-		log.Logger = log.Logger.With().
-			// Caller().
-			Logger()
-	}
-
-	for _, msg := range queue {
-		log.Warn().Msg(msg)
-	}
 }

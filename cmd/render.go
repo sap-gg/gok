@@ -13,6 +13,7 @@ import (
 
 	"github.com/sap-gg/gok/internal"
 	"github.com/sap-gg/gok/internal/archive"
+	"github.com/sap-gg/gok/internal/logging"
 	"github.com/sap-gg/gok/internal/render"
 	"github.com/sap-gg/gok/internal/strategy"
 	"github.com/sap-gg/gok/internal/templ"
@@ -21,6 +22,7 @@ import (
 var renderFlags = struct {
 	manifestPath string
 	valuesFiles  []string // for external value files, merged from left to right
+	secretFiles  []string
 
 	// target selector flags:
 	targets    []string
@@ -47,18 +49,6 @@ var renderCmd = &cobra.Command{
 			}
 		}
 
-		// load any external values files (-f)
-		// these are merged with increasing precedence (last one wins)
-		externalValues := make(render.Values)
-		for _, valuesPath := range renderFlags.valuesFiles {
-			log.Info().Msgf("loading values from %q", valuesPath)
-			currentValues, err := loadValueFromFile(valuesPath)
-			if err != nil {
-				return err
-			}
-			externalValues = render.DeepMerge(externalValues, currentValues)
-		}
-
 		renderer := templ.NewTemplateRenderer()
 
 		manifest, manifestDir, err := render.ReadManifest(ctx, renderFlags.manifestPath)
@@ -71,6 +61,22 @@ var renderCmd = &cobra.Command{
 			return fmt.Errorf("reading manifest: %w", err)
 		}
 
+		// load any external values files (-f)
+		externalValues, err := render.LoadValuesFiles(ctx, renderFlags.valuesFiles)
+		if err != nil {
+			return fmt.Errorf("loading external values files: %w", err)
+		}
+
+		secretValues, err := render.LoadValuesFiles(ctx, renderFlags.secretFiles)
+		if err != nil {
+			return fmt.Errorf("loading secret values files: %w", err)
+		}
+		sensitiveStrings := render.CollectStrings(secretValues)
+		logging.Init(sensitiveStrings)
+		log.Debug().Int("count", len(sensitiveStrings)).
+			Msg("initialized logging with sensitive values redaction")
+
+		// select which targets to render
 		targets, err := render.SelectTargets(manifest, renderFlags.allTargets, renderFlags.targets, renderFlags.tags)
 		if err != nil {
 			return fmt.Errorf("selecting targets: %w", err)
@@ -107,7 +113,7 @@ var renderCmd = &cobra.Command{
 			return fmt.Errorf("creating strategy registry: %w", err)
 		}
 
-		engine, err := render.NewEngine(manifestDir, workDir, renderer, registry, externalValues)
+		engine, err := render.NewEngine(manifestDir, workDir, renderer, registry, externalValues, secretValues)
 		if err != nil {
 			return fmt.Errorf("creating render engine: %w", err)
 		}
@@ -164,6 +170,8 @@ func init() {
 		"Path to the manifest file")
 	renderCmd.Flags().StringSliceVarP(&renderFlags.valuesFiles, "values", "f", []string{},
 		"Additional values files to merge, merged left to right")
+	renderCmd.Flags().StringSliceVarP(&renderFlags.secretFiles, "secrets", "s", []string{},
+		"Additional secrets files to merge, merged left to right")
 
 	renderCmd.Flags().StringSliceVarP(&renderFlags.targets, "targets", "t", []string{},
 		"List of targets to render (comma-separated)")
@@ -195,21 +203,6 @@ func newStrategyRegistry() (*strategy.Registry, error) {
 			".json":       &strategy.JSONPatchStrategy{},
 			".toml":       &strategy.TOMLPatchStrategy{},
 		})
-}
-
-func loadValueFromFile(path string) (render.Values, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("opening values file %q: %w", path, err)
-	}
-	defer f.Close()
-
-	var values render.Values
-	if err := internal.NewYAMLDecoder(f).Decode(&values); err != nil {
-		return nil, fmt.Errorf("decoding values file %q: %w", path, err)
-	}
-
-	return values, nil
 }
 
 const (
