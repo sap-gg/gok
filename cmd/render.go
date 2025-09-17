@@ -1,13 +1,11 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/goccy/go-yaml"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
@@ -53,11 +51,6 @@ var renderCmd = &cobra.Command{
 
 		manifest, manifestDir, err := render.ReadManifest(ctx, renderFlags.manifestPath)
 		if err != nil {
-			var yamlError yaml.Error
-			if errors.As(err, &yamlError) {
-				fmt.Println(yamlError.FormatError(true, true))
-				return fmt.Errorf("parsing manifest")
-			}
 			return fmt.Errorf("reading manifest: %w", err)
 		}
 

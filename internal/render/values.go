@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"reflect"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 
@@ -50,6 +51,9 @@ func loadValuesFile(ctx context.Context, path string) (Values, error) {
 
 	var values Values
 	if err := internal.NewYAMLDecoder(content).DecodeContext(ctx, &values); err != nil {
+		if internal.IsDecodeErrorAndPrint(err) {
+			return nil, fmt.Errorf("parsing values")
+		}
 		return nil, fmt.Errorf("decode values file %q: %w", path, err)
 	}
 
@@ -58,28 +62,75 @@ func loadValuesFile(ctx context.Context, path string) (Values, error) {
 
 // CollectStrings recursively walks a map or slice and collects all string leaf values.
 func CollectStrings(data any) []string {
-	var strings []string
+	var res []string
 	val := reflect.ValueOf(data)
 
 	switch val.Kind() {
 	case reflect.Map:
 		for _, key := range val.MapKeys() {
-			strings = append(strings, CollectStrings(val.MapIndex(key).Interface())...)
+			res = append(res, CollectStrings(val.MapIndex(key).Interface())...)
 		}
 	case reflect.Slice:
 		for i := 0; i < val.Len(); i++ {
-			strings = append(strings, CollectStrings(val.Index(i).Interface())...)
+			res = append(res, CollectStrings(val.Index(i).Interface())...)
 		}
 	case reflect.String:
 		if s := val.String(); s != "" {
-			strings = append(strings, s)
+			res = append(res, s)
 		}
 	default:
 		// ignore other types
 		log.Trace().Msgf("ignoring non-string leaf of type %s", val.Kind())
 	}
 
-	return strings
+	return res
+}
+
+// LookupNestedValue traverses a map using a dot-separated path and returns the value if found.
+func LookupNestedValue(data map[string]any, path string) (any, bool) {
+	keys := strings.Split(path, ".")
+	current := any(data)
+
+	for _, key := range keys {
+		val := reflect.ValueOf(current)
+		if val.Kind() != reflect.Map {
+			return nil, false // cannot traverse non-map
+		}
+		// check if key exists
+		keyValue := val.MapIndex(reflect.ValueOf(key))
+		if !keyValue.IsValid() {
+			return nil, false // key not found
+		}
+		current = keyValue.Interface()
+	}
+
+	return current, true
+}
+
+// SetNestedValue populates a map using a dot-separated path string, creating nested maps as needed.
+func SetNestedValue(dest Values, path string, value any) error {
+	keys := strings.Split(path, ".")
+	current := dest
+
+	// traverse / create all but the last key
+	for i, key := range keys[:len(keys)-1] {
+		if _, ok := current[key]; !ok {
+			current[key] = make(Values)
+		}
+		if next, ok := current[key].(Values); ok {
+			current = next
+		} else {
+			// This happens if a path segment is already a non-map value.
+			// e.g., trying to set "a.b.c" when "a.b" is already "hello".
+			return fmt.Errorf("cannot set nested value at %q: segment %q is not a map",
+				path, strings.Join(keys[:i+1], "."))
+		}
+	}
+
+	// set the final key
+	finalKey := keys[len(keys)-1]
+	current[finalKey] = value
+	return nil
 }
 
 // DeepMerge merges multiple Values maps into one, from left to right.

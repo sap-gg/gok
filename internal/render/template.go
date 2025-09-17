@@ -43,13 +43,10 @@ type TemplateManifest struct {
 	// Maintainers is a list of maintainers / responsible persons for this template (optional)
 	Maintainers []*Maintainer `yaml:"maintainers"`
 
-	// Inherits is a list of parent templates to inherit from (optional)
-	Inherits []*InheritSpec `yaml:"inherits"`
-
 	// Imports is a list of values to receive from the manifest.
 	// Only values specified here will be passed from the manifest to this template
-	// and can be imported using {{ .values.some_key }}.
-	Imports map[string]*TemplateValueRequirement `yaml:"imports"`
+	// (optional, default is to receive no values)
+	Imports *TemplateImports `yaml:"imports"`
 }
 
 // NameOrDefault returns the template name, or the base name of the given path if the name is not set.
@@ -69,18 +66,6 @@ func (t *TemplateManifest) MaintainerString() string {
 	return strings.Join(ms, ", ")
 }
 
-// TemplateValueRequirement defines a required value for a template.
-type TemplateValueRequirement struct {
-	// Description of the required value. This may be shown when printing help for a template or when it's missing.
-	Description string
-
-	// Mark this value as required. If a required value is missing, rendering should fail.
-	Required bool
-
-	// Default value if the value is not provided by the manifest and if Required is false.
-	Default any
-}
-
 // Maintainer represents a maintainer / responsible for a template.
 type Maintainer struct {
 	// Name of the maintainer
@@ -96,16 +81,36 @@ func (m *Maintainer) String() string {
 	return m.Name
 }
 
-// InheritSpec defines a parent template to inherit from.
-type InheritSpec struct {
-	// Path to the parent template, **relative to the template's directory**
-	Path string `yaml:"from"`
+type TemplateImports struct {
+	// Values to import from the manifest
+	Values map[string]ValueImport `yaml:"values"`
 
-	// Values to pass to the inherited template
-	Values Values `yaml:"values"`
+	// Secrets to import from the manifest
+	Secrets map[string]ValueImport `yaml:"secrets"`
 
-	// Single marks the template to not apply if it was already applied before
-	Single bool `yaml:"single"`
+	// Manifest indicates that the whole manifest should be imported
+	Manifest *ReasonedImport `yaml:"manifest"`
+
+	// Target indicates that the whole target should be imported
+	Target *ReasonedImport `yaml:"target"`
+}
+
+// ValueImport defines a required (non-)sensitive value.
+type ValueImport struct {
+	// Description is the reasoning for importing this value (e.g. what it's used for)
+	Description string `yaml:"description" validate:"required"`
+
+	// Required marks this value as required. If a required value is missing, rendering should fail.
+	Required bool `yaml:"required"`
+
+	// Default is the default value if the value is not provided by the manifest and if Required is false.
+	Default any `yaml:"default"`
+}
+
+// ReasonedImport defines an import which has a reasoning/description.
+type ReasonedImport struct {
+	// Description is the reasoning for importing the whole manifest (e.g. what it's used for)
+	Description string `yaml:"description"`
 }
 
 // ReadTemplateManifest finds and parses a template.yaml file in a given directory.
@@ -124,6 +129,9 @@ func ReadTemplateManifest(ctx context.Context, dirPath string) (*TemplateManifes
 
 	var m TemplateManifest
 	if err := internal.NewYAMLDecoder(f).DecodeContext(ctx, &m); err != nil {
+		if internal.IsDecodeErrorAndPrint(err) {
+			return nil, fmt.Errorf("parsing template manifest")
+		}
 		return nil, fmt.Errorf("decode template manifest %q: %w", manifestPath, err)
 	}
 

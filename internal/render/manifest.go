@@ -79,6 +79,9 @@ func ReadManifest(ctx context.Context, path string) (*Manifest, string, error) {
 
 	var m Manifest
 	if err := internal.NewYAMLDecoder(f).DecodeContext(ctx, &m); err != nil {
+		if internal.IsDecodeErrorAndPrint(err) {
+			return nil, "", fmt.Errorf("parsing manifest")
+		}
 		return nil, "", fmt.Errorf("decode manifest: %w", err)
 	}
 

@@ -1,6 +1,8 @@
 package internal
 
 import (
+	"errors"
+	"fmt"
 	"io"
 
 	"github.com/go-playground/validator/v10"
@@ -15,6 +17,18 @@ func NewYAMLDecoder(reader io.Reader) *yaml.Decoder {
 		yaml.Validator(validate))
 }
 
+// NewYAMLEncoder creates a new YAML encoder with an indentation of 2 spaces.
 func NewYAMLEncoder(writer io.Writer) *yaml.Encoder {
 	return yaml.NewEncoder(writer, yaml.Indent(2))
+}
+
+// IsDecodeErrorAndPrint checks if the error is a YAML decoding error.
+// If it is, it prints the formatted error and returns true.
+func IsDecodeErrorAndPrint(err error) bool {
+	var yamlError yaml.Error
+	if errors.As(err, &yamlError) {
+		fmt.Println(yamlError.FormatError(true, true))
+		return true
+	}
+	return false
 }
