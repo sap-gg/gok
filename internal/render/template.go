@@ -16,6 +16,8 @@ import (
 	"github.com/sap-gg/gok/internal"
 )
 
+const TemplateVersion = 1
+
 // TemplateRenderer is responsible for parsing and executing Go templates.
 // It caches parsed templates for reuse.
 type TemplateRenderer struct {
@@ -137,6 +139,10 @@ func ReadTemplateManifest(ctx context.Context, dirPath string) (*TemplateManifes
 	var m TemplateManifest
 	if err := internal.NewYAMLDecoder(f).DecodeContext(ctx, &m); err != nil {
 		return nil, fmt.Errorf("decode template manifest %q: %w", manifestPath, err)
+	}
+
+	if m.Version != TemplateVersion {
+		return nil, fmt.Errorf("unsupported template manifest version %d (expected %d)", m.Version, TemplateVersion)
 	}
 
 	return &m, nil
