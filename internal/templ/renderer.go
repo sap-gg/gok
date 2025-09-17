@@ -26,7 +26,8 @@ func (r *TemplateRenderer) Render(w io.Writer, content string, data any) error {
 	if err != nil {
 		return err
 	}
-	log.Debug().Msgf("rendering content with data: %#v", data)
+	// note to ourselves: trace may log sensitive data in this case
+	log.Trace().Msgf("rendering content with data: %#v", data)
 	return tmpl.Execute(w, data)
 }
 

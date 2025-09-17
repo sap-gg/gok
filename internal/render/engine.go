@@ -285,7 +285,7 @@ func (e *Engine) applyTemplateTree(
 	}
 
 	if err := e.applyDir(ctx, srcRoot, currentOutputResolver, tracker, Values{
-		"values":          values,
+		"imports":         values,
 		"manifest_values": manifestValues,
 	}); err != nil {
 		return fmt.Errorf("apply dir %q: %w", srcRoot, err)
