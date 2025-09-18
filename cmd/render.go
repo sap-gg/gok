@@ -114,6 +114,11 @@ var renderCmd = &cobra.Command{
 		if err := engine.RenderTargets(ctx, manifest, targets); err != nil {
 			return fmt.Errorf("rendering targets: %w", err)
 		}
+
+		if err := engine.ResolveArtifacts(ctx); err != nil {
+			return fmt.Errorf("resolving artifacts: %w", err)
+		}
+
 		log.Info().Int("count", len(targets)).Msg("successfully rendered all targets to work directory")
 
 		if renderFlags.outPath == "" {

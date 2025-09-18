@@ -7,5 +7,6 @@ const (
 )
 
 const (
-	TemplateInfix = ".templ"
+	TemplateInfix  = ".templ"
+	ArtifactSuffix = ".artifact.yaml"
 )

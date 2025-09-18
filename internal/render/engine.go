@@ -16,14 +16,16 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/sap-gg/gok/internal"
+	"github.com/sap-gg/gok/internal/artifact"
 	"github.com/sap-gg/gok/internal/strategy"
 	"github.com/sap-gg/gok/internal/templ"
 )
 
 // Engine performs the rendering for manifest targets
 type Engine struct {
-	registry *strategy.Registry
-	renderer *templ.TemplateRenderer
+	registry        *strategy.Registry
+	renderer        *templ.TemplateRenderer
+	artifactTracker *artifact.Tracker
 
 	externalValues Values
 	secretData     Values
@@ -55,6 +57,11 @@ func NewEngine(
 		return nil, fmt.Errorf("strategy registry is required")
 	}
 
+	artifactTracker, err := artifact.NewTracker()
+	if err != nil {
+		return nil, fmt.Errorf("artifact tracker: %w", err)
+	}
+
 	manifestDirResolver, err := NewGenericPathResolver(manifestDir)
 	if err != nil {
 		return nil, fmt.Errorf("manifest dir resolver: %w", err)
@@ -66,8 +73,9 @@ func NewEngine(
 	}
 
 	return &Engine{
-		registry: registry,
-		renderer: renderer,
+		registry:        registry,
+		renderer:        renderer,
+		artifactTracker: artifactTracker,
 
 		externalValues: externalValues,
 		secretData:     secretValues,
@@ -414,7 +422,29 @@ func (e *Engine) applyFile(ctx context.Context, src, dst string, tracker *Tracke
 		srcContentReader io.Reader
 	)
 
-	if strings.Contains(filepath.Base(src), internal.TemplateInfix) {
+	base := filepath.Base(src)
+
+	if strings.HasSuffix(base, internal.ArtifactSuffix) {
+		finalDst = strings.TrimSuffix(dst, internal.ArtifactSuffix)
+		log.Debug().Msgf("detected artifact manifest for %q", finalDst)
+
+		content, err := os.ReadFile(src)
+		if err != nil {
+			return fmt.Errorf("read artifact manifest %q: %w", src, err)
+		}
+
+		var renderedContent bytes.Buffer
+
+		// artifacts are always rendered using text/template
+		if err := e.renderer.Render(&renderedContent, string(content), data); err != nil {
+			return fmt.Errorf("render artifact manifest %q: %w", src, err)
+		}
+
+		// don't apply any file strategy, just register the artifact for later processing
+		return e.artifactTracker.Register(finalDst, &renderedContent)
+	}
+
+	if strings.Contains(base, internal.TemplateInfix) {
 		log.Debug().Msgf("rendering template file %q...", src)
 		finalDst = strings.Replace(dst, internal.TemplateInfix, "", 1)
 
@@ -464,37 +494,7 @@ func (e *Engine) applyFile(ctx context.Context, src, dst string, tracker *Tracke
 	return strat.Apply(ctx, srcContentReader, finalDst, tracker)
 }
 
-type valueSource string
-
-const (
-	valueSourceGlobal   valueSource = "global"
-	valueSourceExternal valueSource = "external"
-	valueSourceTarget   valueSource = "target"
-	valueSourceTemplate valueSource = "template"
-)
-
-func retrieveValue(
-	name string,
-	templateSpec *TemplateSpec,
-	target *ManifestTarget,
-	manifest *Manifest,
-	externalValues Values,
-) (any, valueSource, bool) {
-	// highest precedence: template-specific values
-	if val, ok := templateSpec.Values[name]; ok {
-		return val, valueSourceTemplate, true
-	}
-	// next: target specific values
-	if val, ok := target.Values[name]; ok {
-		return val, valueSourceTarget, true
-	}
-	// next: externally provided values (e.g. CLI -set flags)
-	if val, ok := externalValues[name]; ok {
-		return val, valueSourceExternal, true
-	}
-	// last: global manifest values
-	if val, ok := manifest.Values[name]; ok {
-		return val, valueSourceGlobal, true
-	}
-	return nil, "", false
+// ResolveArtifacts triggers the processing of all collected artifacts.
+func (e *Engine) ResolveArtifacts(ctx context.Context) error {
+	return e.artifactTracker.ProcessAll(ctx)
 }
