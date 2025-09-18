@@ -29,7 +29,6 @@ func (s *YAMLPatchStrategy) Apply(
 	ctx context.Context,
 	srcContent io.Reader,
 	dst string,
-	tr trackerApplier,
 ) error {
 	log.Info().Msgf("[yaml-patch] applying to %q", dst)
 
@@ -75,6 +74,5 @@ func (s *YAMLPatchStrategy) Apply(
 		return fmt.Errorf("writing merged YAML to %q: %w", dst, err)
 	}
 
-	tr.Record(dst)
 	return nil
 }

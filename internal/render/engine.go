@@ -125,24 +125,15 @@ func (e *Engine) RenderTarget(
 		return fmt.Errorf("output dir resolver: %w", err)
 	}
 
-	tracker := NewTracker(currentOutputResolver)
-
 	for _, templateSpec := range target.Templates {
 		if err := e.applyTemplate(ctx,
 			manifest,
 			target,
 			templateSpec,
 			currentOutputResolver,
-			tracker,
 		); err != nil {
 			return fmt.Errorf("processing template spec %q: %w", templateSpec.Path, err)
 		}
-	}
-
-	// write lock file
-	if err := tracker.WriteLock(); err != nil {
-		log.Error().Err(err).Msg("failed to write lock file")
-		return err
 	}
 
 	return nil
@@ -154,7 +145,6 @@ func (e *Engine) applyTemplate(
 	target *ManifestTarget,
 	templateSpec *TemplateSpec,
 	currentOutputResolver *GenericPathResolver,
-	tracker *Tracker,
 ) error {
 	l := log.With().Str("template", templateSpec.Path).Logger()
 
@@ -218,11 +208,11 @@ func (e *Engine) applyTemplate(
 	}
 
 	// apply deletions
-	if err := e.applyDeletions(ctx, srcRoot, currentOutputResolver, tracker); err != nil {
+	if err := e.applyDeletions(ctx, srcRoot, currentOutputResolver); err != nil {
 		return fmt.Errorf("apply deletions for %q: %w", srcRoot, err)
 	}
 
-	if err := e.applyDir(ctx, srcRoot, currentOutputResolver, tracker, templateContext); err != nil {
+	if err := e.applyDir(ctx, srcRoot, currentOutputResolver, templateContext); err != nil {
 		return fmt.Errorf("apply dir %q: %w", srcRoot, err)
 	}
 
@@ -311,6 +301,12 @@ func buildTemplateContext(
 	}, nil
 }
 
+// DeletionSpec is the structure of the deletions file.
+type DeletionSpec struct {
+	Version   int         `yaml:"version"`
+	Deletions []*Deletion `yaml:"deletions"`
+}
+
 // Deletion is a deletion entry in the deletions file.
 type Deletion struct {
 	Path      string `yaml:"path"`
@@ -321,7 +317,6 @@ func (e *Engine) applyDeletions(
 	ctx context.Context,
 	srcRoot string,
 	dstDirResolver *GenericPathResolver,
-	tracker *Tracker,
 ) error {
 	deletionsFile := filepath.Join(srcRoot, internal.DeletionFileName)
 
@@ -335,16 +330,21 @@ func (e *Engine) applyDeletions(
 		return fmt.Errorf("open deletions file %q: %w", deletionsFile, err)
 	}
 
-	var deletions []*Deletion
-	if err := internal.NewYAMLDecoder(f).DecodeContext(ctx, &deletions); err != nil {
+	var spec DeletionSpec
+	if err := internal.NewYAMLDecoder(f).DecodeContext(ctx, &spec); err != nil {
 		if internal.IsDecodeErrorAndPrint(err) {
 			return fmt.Errorf("parsing deletions")
 		}
 		return fmt.Errorf("decode deletions file %q: %w", deletionsFile, err)
 	}
 
-	log.Info().Msgf("applying %d deletions from %q...", len(deletions), internal.DeletionFileName)
-	for _, deletion := range deletions {
+	if spec.Version != internal.DeletionVersion {
+		return fmt.Errorf("unsupported deletions version %d (expected %d)",
+			spec.Version, internal.ManifestVersion)
+	}
+
+	log.Info().Msgf("applying %d deletions from %q...", len(spec.Deletions), internal.DeletionFileName)
+	for _, deletion := range spec.Deletions {
 		absPath, err := dstDirResolver.Resolve(deletion.Path)
 		if err != nil {
 			log.Warn().Err(err).Msgf("could not resolve deletion path %q", deletion.Path)
@@ -363,9 +363,6 @@ func (e *Engine) applyDeletions(
 			}
 		} else {
 			log.Info().Msgf("deleted path %q", absPath)
-
-			// remove from tracker as well
-			tracker.Remove(absPath)
 		}
 	}
 
@@ -376,7 +373,6 @@ func (e *Engine) applyDir(
 	ctx context.Context,
 	srcDir string,
 	dstDirResolver *GenericPathResolver,
-	tracker *Tracker,
 	data any,
 ) error {
 	return filepath.WalkDir(srcDir, func(path string, d os.DirEntry, walkErr error) error {
@@ -412,11 +408,11 @@ func (e *Engine) applyDir(
 			return fmt.Errorf("resolve dst %q: %w", rel, err)
 		}
 
-		return e.applyFile(ctx, path, dst, tracker, data)
+		return e.applyFile(ctx, path, dst, data)
 	})
 }
 
-func (e *Engine) applyFile(ctx context.Context, src, dst string, tracker *Tracker, data any) error {
+func (e *Engine) applyFile(ctx context.Context, src, dst string, data any) error {
 	var (
 		finalDst         = dst
 		srcContentReader io.Reader
@@ -491,7 +487,7 @@ func (e *Engine) applyFile(ctx context.Context, src, dst string, tracker *Tracke
 		}
 	}
 
-	return strat.Apply(ctx, srcContentReader, finalDst, tracker)
+	return strat.Apply(ctx, srcContentReader, finalDst)
 }
 
 // ResolveArtifacts triggers the processing of all collected artifacts.

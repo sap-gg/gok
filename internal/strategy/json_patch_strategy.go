@@ -26,10 +26,9 @@ func (s *JSONPatchStrategy) Name() string {
 // Apply applies the JSON patch strategy to the given file content.
 // It expects the content to be a valid JSON document and applies the patch accordingly.
 func (s *JSONPatchStrategy) Apply(
-	ctx context.Context,
+	_ context.Context,
 	srcContent io.Reader,
 	dst string,
-	tr trackerApplier,
 ) error {
 	log.Info().Msgf("[json-patch] applying to %q", dst)
 
@@ -70,7 +69,6 @@ func (s *JSONPatchStrategy) Apply(
 		return fmt.Errorf("writing merged JSON to %q: %w", dst, err)
 	}
 
-	tr.Record(dst)
 	return nil
 
 }

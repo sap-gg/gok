@@ -24,7 +24,6 @@ func (s *PropertiesPatchStrategy) Apply(
 	ctx context.Context,
 	srcContent io.Reader,
 	dst string,
-	tr trackerApplier,
 ) error {
 	log.Info().Msgf("[properties-patch] merging into %q", dst)
 
@@ -69,6 +68,5 @@ func (s *PropertiesPatchStrategy) Apply(
 		return fmt.Errorf("writing merged properties to %q: %w", dst, err)
 	}
 
-	tr.Record(dst)
 	return nil
 }

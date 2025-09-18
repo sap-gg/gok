@@ -11,6 +11,7 @@ import (
 
 	"github.com/sap-gg/gok/internal"
 	"github.com/sap-gg/gok/internal/archive"
+	"github.com/sap-gg/gok/internal/lockfile"
 	"github.com/sap-gg/gok/internal/logging"
 	"github.com/sap-gg/gok/internal/render"
 	"github.com/sap-gg/gok/internal/strategy"
@@ -117,6 +118,10 @@ var renderCmd = &cobra.Command{
 
 		if err := engine.ResolveArtifacts(ctx); err != nil {
 			return fmt.Errorf("resolving artifacts: %w", err)
+		}
+
+		if err := lockfile.Create(ctx, workDir); err != nil {
+			return fmt.Errorf("creating lock file: %w", err)
 		}
 
 		log.Info().Int("count", len(targets)).Msg("successfully rendered all targets to work directory")

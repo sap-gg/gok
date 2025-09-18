@@ -9,6 +9,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+//goland:noinspection SpellCheckingInspection I swear it's correct!!
+const option = "missingkey=error"
+
 // TemplateRenderer is responsible for parsing and executing Go templates.
 // It caches parsed templates for reuse.
 type TemplateRenderer struct {
@@ -37,7 +40,7 @@ func (r *TemplateRenderer) getTemplate(content string) (*template.Template, erro
 	}
 
 	tmpl, err := template.New("gok").
-		Option("missingkey=error").
+		Option(option).
 		Parse(content)
 	if err != nil {
 		return nil, fmt.Errorf("parsing template: %w", err)

@@ -8,12 +8,6 @@ import (
 	"strings"
 )
 
-// trackerApplier is the minimal interface to record changes.
-// strategies MUST call Record() for each created/modified path.
-type trackerApplier interface {
-	Record(path string)
-}
-
 // FileStrategy defines how to apply source content onto a destination path.
 type FileStrategy interface {
 	// Name returns a human-friendly strategy name for logging/metrics.
@@ -21,7 +15,7 @@ type FileStrategy interface {
 
 	// Apply takes content from the srcContent reader, applies it to the dst path,
 	// and reports whether dst was created or modified via the tracker.
-	Apply(ctx context.Context, srcContent io.Reader, dst string, tr trackerApplier) error
+	Apply(ctx context.Context, srcContent io.Reader, dst string) error
 }
 
 // Registry maps file extensions to strategies.

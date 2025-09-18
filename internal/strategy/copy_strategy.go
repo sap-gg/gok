@@ -22,7 +22,7 @@ func (s *CopyOnlyStrategy) Name() string {
 	return "copy-only"
 }
 
-func (s *CopyOnlyStrategy) Apply(ctx context.Context, srcContent io.Reader, dst string, tr trackerApplier) error {
+func (s *CopyOnlyStrategy) Apply(ctx context.Context, srcContent io.Reader, dst string) error {
 	log.Info().Msgf("[copy-only] applying to: %q...", dst)
 
 	// Best-effort context check, no I/O cancellation
@@ -56,6 +56,5 @@ func (s *CopyOnlyStrategy) Apply(ctx context.Context, srcContent io.Reader, dst 
 		return fmt.Errorf("copy to %q: %w", dst, err)
 	}
 
-	tr.Record(dst)
 	return nil
 }

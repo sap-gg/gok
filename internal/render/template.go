@@ -11,8 +11,6 @@ import (
 	"github.com/sap-gg/gok/internal"
 )
 
-const TemplateVersion = 1
-
 // TemplateSpec represents a single template specification inside the manifest, including the path to the template file.
 type TemplateSpec struct {
 	// The Path to the template, **relative to the manifest file**
@@ -135,8 +133,9 @@ func ReadTemplateManifest(ctx context.Context, dirPath string) (*TemplateManifes
 		return nil, fmt.Errorf("decode template manifest %q: %w", manifestPath, err)
 	}
 
-	if m.Version != TemplateVersion {
-		return nil, fmt.Errorf("unsupported template manifest version %d (expected %d)", m.Version, TemplateVersion)
+	if m.Version != internal.TemplateManifestVersion {
+		return nil, fmt.Errorf("unsupported template manifest version %d (expected %d)",
+			m.Version, internal.TemplateManifestVersion)
 	}
 
 	return &m, nil

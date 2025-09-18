@@ -26,10 +26,9 @@ func (s *TOMLPatchStrategy) Name() string {
 // Apply applies the TOML patch strategy to the given file content.
 // It expects the content to be a valid TOML document and applies the patch accordingly.
 func (s *TOMLPatchStrategy) Apply(
-	ctx context.Context,
+	_ context.Context,
 	srcContent io.Reader,
 	dst string,
-	tr trackerApplier,
 ) error {
 	log.Info().Msgf("[toml-patch] applying to %q", dst)
 
@@ -70,6 +69,5 @@ func (s *TOMLPatchStrategy) Apply(
 		return fmt.Errorf("writing merged properties to %q: %w", dst, err)
 	}
 
-	tr.Record(dst)
 	return nil
 }

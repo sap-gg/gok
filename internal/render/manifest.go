@@ -9,8 +9,6 @@ import (
 	"github.com/sap-gg/gok/internal"
 )
 
-const ManifestVersion = 1
-
 // Manifest represents the structure of the manifest file used to define rendering targets and their associated templates.
 type Manifest struct {
 	// Version indicates the version of the manifest format.
@@ -85,8 +83,9 @@ func ReadManifest(ctx context.Context, path string) (*Manifest, string, error) {
 		return nil, "", fmt.Errorf("decode manifest: %w", err)
 	}
 
-	if m.Version != ManifestVersion {
-		return nil, "", fmt.Errorf("unsupported manifest version %d (expected %d)", m.Version, ManifestVersion)
+	if m.Version != internal.ManifestVersion {
+		return nil, "", fmt.Errorf("unsupported manifest version %d (expected %d)",
+			m.Version, internal.ManifestVersion)
 	}
 
 	// some manifest validation
