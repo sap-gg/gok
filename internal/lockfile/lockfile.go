@@ -80,7 +80,7 @@ func Create(ctx context.Context, rootDir string) error {
 			return fmt.Errorf("getting file info f or %q: %w", path, err)
 		}
 
-		hash, err := fileSHA256(path)
+		hash, err := FileSHA256(path)
 		if err != nil {
 			return fmt.Errorf("computing hash for %q: %w", path, err)
 		}
@@ -116,8 +116,36 @@ func Create(ctx context.Context, rootDir string) error {
 	return nil
 }
 
-// fileSHA256 computes the SHA256 hash of the file at the specified path and returns it as a hex string.
-func fileSHA256(path string) (string, error) {
+// Read reads and parses the lock file from the specified root directory.
+func Read(rootDir string) (*LockFile, error) {
+	lockPath := filepath.Join(rootDir, internal.LockFileName)
+	f, err := os.Open(lockPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// no lock file is not an error, return empty lockfile
+			return &LockFile{Files: make(LockFiles)}, nil
+		}
+		return nil, fmt.Errorf("opening lock file: %w", err)
+	}
+	defer f.Close()
+
+	var lock LockFile
+	if err := internal.NewYAMLDecoder(f).Decode(&lock); err != nil {
+		if internal.IsDecodeErrorAndPrint(err) {
+			return nil, fmt.Errorf("parsing lock file")
+		}
+		return nil, fmt.Errorf("decoding lock file: %w", err)
+	}
+
+	if lock.Version != internal.LockFileVersion {
+		return nil, fmt.Errorf("unsupported lock file version: %d", lock.Version)
+	}
+
+	return &lock, nil
+}
+
+// FileSHA256 computes the SHA256 hash of the file at the specified path and returns it as a hex string.
+func FileSHA256(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err

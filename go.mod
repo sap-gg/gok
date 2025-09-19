@@ -3,6 +3,7 @@ module github.com/sap-gg/gok
 go 1.24.1
 
 require (
+	github.com/fatih/color v1.18.0
 	github.com/go-playground/validator/v10 v10.27.0
 	github.com/goccy/go-yaml v1.18.0
 	github.com/magiconair/properties v1.8.10
