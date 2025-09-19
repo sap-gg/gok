@@ -13,7 +13,9 @@ import (
 	"github.com/sap-gg/gok/internal/diff"
 )
 
-// diffCmd represents the diff command
+// diffCmd represents the diff command.
+// It's very similar to the applyCmd (with dry run always enabled),
+// but it does not make any changes to the output directory.
 var diffCmd = &cobra.Command{
 	Use:     "diff <source-artifact.tar.gz> <output-dir>",
 	Short:   "Compares a rendered artifact with an existing output directory.",
@@ -85,7 +87,8 @@ func init() {
 
 const (
 	diffLongDescription = `The diff command provides a safe, read-only preview of the changes that would be
-made by applying a rendered artifact.
+made by applying a rendered artifact. It is similar to the 'apply' command,
+but it does not modify any files in the output directory.
 
 It performs a three-way comparison between:
 1. The 'desired state' (the contents of the <source-artifact.tar.gz> file)
