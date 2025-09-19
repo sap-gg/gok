@@ -24,13 +24,13 @@ configurations for multiple environments (e.g., development and production) by c
 
 ## Features
 
-* **Layered Templating**: Build complex configurations by composing smaller, reusable templates in a specific order.
+* **Layered Templating**: Build configurations by composing smaller, reusable templates in a specific order.
 * **Go Templating**: Files with a `.templ` infix (e.g., `config.yaml.templ`) are processed as Go templates, allowing for
   dynamic content generation.
 * **Data Injection**: Provide non-sensitive values (`--values`) and sensitive secrets (`--secret-values`) to templates
   through a strictly-defined import system.
-* **Secret Redaction**: All values provided via `--secret-values` are automatically redacted from log output to prevent
-  accidental leaks.
+* **State Comparison (diff): Safely preview changes between a rendered artifact and a live environment,
+  including conflict detection for manual changes.
 * **Configuration Patching**: Automatically merges configuration files for YAML, JSON, TOML, and `.properties` formats,
   rather than overwriting them.
 * **File Deletion**: Templates can explicitly delete files that were added by a previously applied template layer.
@@ -74,57 +74,72 @@ go install github.com/sap-gg/gok@latest
 
 ## Usage
 
-The primary command is `gok render`. It reads the manifest, processes the specified targets, and generates the output.
+The tool is designed around a three-step workflow: **Render**, **Diff**, and **Apply**.
+
+**1. Render:**
+
+First, use `gok render` to process your manifest and templates, producing a versioned, self-contained artifact.
 
 ```bash
 gok render -m <manifest-path> [target-selectors] -o <output-path> [value-files]
 ```
 
+**2. Diff:**
+
+Next, use `gok diff` to get a read-only preview of the changes that would be made by applying the artifact to a live
+environment.
+This command will detect any manual changes ("drift") on the target.
+
+```bash
+gok diff <source-artifact.tar.gz> <current-output-dir>
+```
+
+**3. Apply:**
+
+Finally, use `gok apply` to apply the changes.
+It will abort by default if it detects conflicts, protecting manual changes from being overwritten.
+
+```bash
+gok apply <source-artifact.tar.gz> --destination <dir>
+```
+
+---
+
 ### Examples
 
-**Render a single target to a directory:**
+A typical workflow for deploying a change to a production server.
+
+**Step 1: Render the production target with values and secrets into a versioned archive:**
 
 ```bash
-gok render -t proxy -o ./proxy_files
-```
-
-**Render multiple targets to a compressed archive:**
-
-```bash
-gok render -t proxy -t survival -o ./servers.tar.gz
-```
-
-**Render a production target using values and decrypted secrets:**
-
-```bash
-# Decrypt the SOPS file first
-sops -d secrets/production.sops.yaml > decrypted-secrets.yaml
-
-# Run the render command
-gok render \
+# Decrypt secrets and pipe them to the render command
+sops -d secrets/production.sops.yaml | gok render \
   -t survival-prod \
   -f values/common.yaml \
-  -f values/production.yaml \
-  -s decrypted-secrets.yaml \
-  -o survival-prod.tar.gz
-
-# Clean up the decrypted file
-rm decrypted-secrets.yaml
+  -s - \
+  -o survival-prod-v1.1.0.tar.gz
 ```
 
-**Pipe secrets directly from stdin:**
+**Step 2: Diff the rendered artifact against the current live configuration:**
 
 ```bash
-sops -d secrets/production.sops.yaml | gok render -t survival-prod -s -
+gok diff ./survival-prod-v1.1.0.tar.gz /opt/minecraft/survival
+```
+
+**Step 3: Apply the changes if the diff looks good:**
+
+```bash
+gok apply ./survival-prod-v1.1.0.tar.gz --destination /opt/minecraft/survival
 ```
 
 ---
 
 ## File Format Reference
 
-### `gok-manifest.yaml`
+### `(root)/gok-manifest.yaml`
 
-This is the main entry point.
+This is the main entry point and defines all renderable targets.
+Each target specifies an ordered list of templates to apply.
 
 ```yaml
 version: 1
@@ -150,19 +165,22 @@ targets:
       - from: ./overlays/survival-prod
 ```
 
-### `gok-template.yaml`
+### `template/(root)/gok-template.yaml`
 
 This optional file resides in a template's root directory to provide metadata and declare data dependencies.
 
 ```yaml
 version: 1
+
 name: "my-template"
 description: "Provides the base configuration for a service."
+
 maintainers:
   - name: "Team A"
     email: "team-a@example.com"
 
 # Explicitly declare all data dependencies for this template.
+# ONLY the declared imports will be available in templates.
 imports:
   # Request non-sensitive values (from --values files).
   values:
@@ -185,11 +203,47 @@ imports:
     description: "Needed to read the output paths of other targets."
 ```
 
+### `template/(root)/gok-deletions.yaml`
+
+This optional file can be placed in a template or overlay directory
+to specify files that should be deleted from the final output.
+
+```yaml
+version: 1
+
+# List of file paths (relative to the template root) to delete.
+# These files will be removed from the final output if they exist.
+deletions:
+  - path: "unwanted-file.txt"
+  - path: plugins/
+    recursive: true  # Delete plugins/ with all its contents
+```
+
+### `template/**/*.artifact.yaml`
+
+These optional files can be placed anywhere within a template directory.
+These files contain external assets that need to be fetched after rendering.
+
+```yaml
+version: 1
+
+algorithm: "sha256"
+checksum: "fefefefe...fefefefe"
+
+source:
+  http:
+    url: "example.com/some-artifact.jar"
+    headers:
+      Authorization: "Basic dXNlcjpwYXNzd29yZA=="
+```
+
 ---
 
 ## Templating
 
-Files with a `.templ` infix are processed by Go's `text/template` engine. The data passed to the template is structured
+Files with a `.templ` infix are processed by Go's `text/template` engine.
+(**note:** artifacts don't need to have the `.templ` infix)
+The data passed to the template is structured
 into scopes based on the `imports` declaration in the template's manifest.
 
 **Example `config.yaml.templ`:**
