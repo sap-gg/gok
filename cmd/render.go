@@ -57,14 +57,14 @@ var renderCmd = &cobra.Command{
 		}
 
 		// load any external values files (-f)
-		externalValues, err := render.LoadValuesFiles(ctx, renderFlags.valuesFiles)
+		externalValues, err := render.ParseValuesOverwrites(ctx, renderFlags.valuesFiles)
 		if err != nil {
 			return fmt.Errorf("loading external values files: %w", err)
 		}
 
-		valuesOverwries := make(render.Values)
-		for k, v := range renderFlags.valueOverwrites {
-			valuesOverwries[k] = v
+		valuesOverwrites, err := render.ParseStringToStringValuesOverwrites(ctx, renderFlags.valueOverwrites)
+		if err != nil {
+			return fmt.Errorf("loading flag string overwrites: %w", err)
 		}
 
 		secretValues, err := render.LoadValuesFiles(ctx, renderFlags.secretFiles)
@@ -119,7 +119,7 @@ var renderCmd = &cobra.Command{
 			registry,
 			externalValues,
 			secretValues,
-			valuesOverwries,
+			valuesOverwrites,
 		)
 		if err != nil {
 			return fmt.Errorf("creating render engine: %w", err)

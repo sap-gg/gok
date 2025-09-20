@@ -12,6 +12,8 @@ const (
 
 	LockFileName    = "gok-lock.yaml"
 	LockFileVersion = 1
+
+	OverwritesFileVersion = 1
 )
 
 const (

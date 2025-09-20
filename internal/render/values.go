@@ -18,6 +18,123 @@ type (
 	ScopedValues map[string]Values
 )
 
+// ValuesOverwritesSpec are global or per-target overwrites
+type ValuesOverwritesSpec struct {
+	Version int
+
+	// Values are global value overwrites
+	Values Values
+
+	// Target are overwrites per taget
+	Targets map[string]*ValuesTargetOverwrites
+}
+
+func NewValuesOverwritesSpec() *ValuesOverwritesSpec {
+	return &ValuesOverwritesSpec{
+		Version: internal.OverwritesFileVersion,
+		Values:  make(Values),
+		Targets: make(map[string]*ValuesTargetOverwrites),
+	}
+}
+
+// ValuesTargetOverwrites are overwrites specific to a target.
+type ValuesTargetOverwrites struct {
+	Values Values
+}
+
+func NewValuesTargetOverwrites() *ValuesTargetOverwrites {
+	return &ValuesTargetOverwrites{
+		Values: make(Values),
+	}
+}
+
+func parseValuesOverwrites(ctx context.Context, path string) (*ValuesOverwritesSpec, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("opening file %q: %w", path, err)
+	}
+	defer f.Close()
+
+	var spec ValuesOverwritesSpec
+	if err := internal.NewYAMLDecoder(f).DecodeContext(ctx, &spec); err != nil {
+		if internal.IsDecodeErrorAndPrint(err) {
+			return nil, fmt.Errorf("parsing spec")
+		}
+		return nil, fmt.Errorf("decoding overwrites %q: %w", path, err)
+	}
+
+	if spec.Version != internal.OverwritesFileVersion {
+		return nil, fmt.Errorf("unsupported overwrites version %d (expected %d)",
+			spec.Version, internal.OverwritesFileVersion)
+	}
+
+	return &spec, nil
+}
+
+// ParseValuesOverwrites parses multiple overwrite files and merges them into one single spec.
+func ParseValuesOverwrites(ctx context.Context, paths []string) (*ValuesOverwritesSpec, error) {
+	result := NewValuesOverwritesSpec()
+	for _, p := range paths {
+		o, err := parseValuesOverwrites(ctx, p)
+		if err != nil {
+			return nil, err
+		}
+		result.Values = DeepMerge(result.Values, o.Values)
+		for target, targetValues := range o.Targets {
+			if _, ok := result.Targets[target]; !ok {
+				result.Targets[target] = NewValuesTargetOverwrites()
+			}
+			result.Targets[target].Values = DeepMerge(result.Targets[target].Values, targetValues.Values)
+		}
+	}
+	return result, nil
+}
+
+func ParseStringToStringValuesOverwrites(_ context.Context, m map[string]string) (*ValuesOverwritesSpec, error) {
+	result := NewValuesOverwritesSpec()
+
+	// [<target>].value=v, or:
+	// value=v, or:
+	// nested.value=v
+	for k, v := range m {
+		// target-specific value
+		if strings.HasPrefix(k, "@") && strings.Contains(k, ".") {
+			dot := strings.Index(k, ".")
+
+			targetID := k[1:dot]
+			if _, ok := result.Targets[targetID]; !ok {
+				result.Targets[targetID] = NewValuesTargetOverwrites()
+			}
+
+			k = k[dot+1:]
+			if err := SetNestedValue(result.Targets[targetID].Values, k, v); err != nil {
+				return nil, fmt.Errorf("setting target value %q: %w", k, err)
+			}
+		} else {
+			if err := SetNestedValue(result.Values, k, v); err != nil {
+				return nil, fmt.Errorf("setting global value %q: %w", k, err)
+			}
+		}
+	}
+
+	return result, nil
+}
+
+func (s *ValuesOverwritesSpec) ValuesForTarget(targetID string) Values {
+	var v Values
+	// first apply all global external values
+	if s.Values != nil {
+		v = s.Values
+	} else {
+		v = make(Values)
+	}
+	// then any target specific values
+	if vals, ok := s.Targets[targetID]; ok {
+		v = DeepMerge(v, vals.Values)
+	}
+	return v
+}
+
 // LoadValuesFiles reads a list of YAML file paths, parses them, and merges them.
 // It supports reading from stdin by using "-" as a path.
 func LoadValuesFiles(ctx context.Context, paths []string) (Values, error) {

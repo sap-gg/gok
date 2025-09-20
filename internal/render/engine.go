@@ -27,9 +27,9 @@ type Engine struct {
 	renderer        *templ.TemplateRenderer
 	artifactTracker *artifact.Tracker
 
-	externalValues   Values
+	externalValues   *ValuesOverwritesSpec
 	secretData       Values
-	valuesOverwrites Values
+	valuesOverwrites *ValuesOverwritesSpec
 
 	// manifestDir is the directory of the manifest.yaml
 	manifestDir         string
@@ -45,9 +45,9 @@ func NewEngine(
 	manifestDir, workDir string,
 	renderer *templ.TemplateRenderer,
 	registry *strategy.Registry,
-	externalValues Values,
+	externalValues *ValuesOverwritesSpec,
 	secretValues Values,
-	valuesOverwrites Values,
+	valuesOverwrites *ValuesOverwritesSpec,
 ) (*Engine, error) {
 	if manifestDir == "" {
 		return nil, fmt.Errorf("manifest dir is required")
@@ -183,6 +183,9 @@ func (e *Engine) applyTemplate(
 		}
 	}
 
+	externalValues := e.externalValues.ValuesForTarget(target.ID)
+	overwrites := e.valuesOverwrites.ValuesForTarget(target.ID)
+
 	// build all available values for the template
 	// precedence (highest to lowest):
 	// 1. template-specific values
@@ -192,9 +195,9 @@ func (e *Engine) applyTemplate(
 	availableValues := DeepMerge(
 		manifest.Values,
 		target.Values,
-		e.externalValues,
+		externalValues,
 		templateSpec.Values,
-		e.valuesOverwrites,
+		overwrites,
 	)
 
 	templateContext, err := buildTemplateContext(l, templateManifest, manifest, target, availableValues, e.secretData)
@@ -344,7 +347,7 @@ func (e *Engine) applyDeletions(
 
 	if spec.Version != internal.DeletionVersion {
 		return fmt.Errorf("unsupported deletions version %d (expected %d)",
-			spec.Version, internal.ManifestVersion)
+			spec.Version, internal.DeletionVersion)
 	}
 
 	log.Info().Msgf("applying %d deletions from %q...", len(spec.Deletions), internal.DeletionFileName)
