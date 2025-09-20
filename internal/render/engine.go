@@ -27,8 +27,9 @@ type Engine struct {
 	renderer        *templ.TemplateRenderer
 	artifactTracker *artifact.Tracker
 
-	externalValues Values
-	secretData     Values
+	externalValues   Values
+	secretData       Values
+	valuesOverwrites Values
 
 	// manifestDir is the directory of the manifest.yaml
 	manifestDir         string
@@ -46,6 +47,7 @@ func NewEngine(
 	registry *strategy.Registry,
 	externalValues Values,
 	secretValues Values,
+	valuesOverwrites Values,
 ) (*Engine, error) {
 	if manifestDir == "" {
 		return nil, fmt.Errorf("manifest dir is required")
@@ -77,8 +79,9 @@ func NewEngine(
 		renderer:        renderer,
 		artifactTracker: artifactTracker,
 
-		externalValues: externalValues,
-		secretData:     secretValues,
+		externalValues:   externalValues,
+		secretData:       secretValues,
+		valuesOverwrites: valuesOverwrites,
 
 		manifestDir:         manifestDir,
 		manifestDirResolver: manifestDirResolver,
@@ -191,6 +194,7 @@ func (e *Engine) applyTemplate(
 		target.Values,
 		e.externalValues,
 		templateSpec.Values,
+		e.valuesOverwrites,
 	)
 
 	templateContext, err := buildTemplateContext(l, templateManifest, manifest, target, availableValues, e.secretData)

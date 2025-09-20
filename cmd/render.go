@@ -19,9 +19,10 @@ import (
 )
 
 var renderFlags = struct {
-	manifestPath string
-	valuesFiles  []string // for external value files, merged from left to right
-	secretFiles  []string
+	manifestPath    string
+	valuesFiles     []string // for external value files, merged from left to right
+	secretFiles     []string
+	valueOverwrites map[string]string
 
 	// target selector flags:
 	targets    []string
@@ -59,6 +60,11 @@ var renderCmd = &cobra.Command{
 		externalValues, err := render.LoadValuesFiles(ctx, renderFlags.valuesFiles)
 		if err != nil {
 			return fmt.Errorf("loading external values files: %w", err)
+		}
+
+		valuesOverwries := make(render.Values)
+		for k, v := range renderFlags.valueOverwrites {
+			valuesOverwries[k] = v
 		}
 
 		secretValues, err := render.LoadValuesFiles(ctx, renderFlags.secretFiles)
@@ -107,7 +113,14 @@ var renderCmd = &cobra.Command{
 			return fmt.Errorf("creating strategy registry: %w", err)
 		}
 
-		engine, err := render.NewEngine(manifestDir, workDir, renderer, registry, externalValues, secretValues)
+		engine, err := render.NewEngine(manifestDir,
+			workDir,
+			renderer,
+			registry,
+			externalValues,
+			secretValues,
+			valuesOverwries,
+		)
 		if err != nil {
 			return fmt.Errorf("creating render engine: %w", err)
 		}
@@ -171,8 +184,10 @@ func init() {
 
 	renderCmd.Flags().StringVarP(&renderFlags.manifestPath, "manifest", "m", internal.ManifestFileName,
 		"Path to the manifest file")
-	renderCmd.Flags().StringSliceVarP(&renderFlags.valuesFiles, "values", "f", []string{},
+	renderCmd.Flags().StringSliceVarP(&renderFlags.valuesFiles, "values-from", "f", []string{},
 		"Additional values files to merge, merged left to right")
+	renderCmd.Flags().StringToStringVarP(&renderFlags.valueOverwrites, "values-overwrites", "v",
+		make(map[string]string), "Additional values to overwrite. These have the highest precedence.")
 	renderCmd.Flags().StringSliceVarP(&renderFlags.secretFiles, "secrets", "s", []string{},
 		"Additional secrets files to merge, merged left to right")
 
@@ -254,7 +269,8 @@ order of precedence (later values override earlier ones):
 1. Global values (from '` + internal.ManifestFileName + `')
 2. External values (from files passed via --values / -f)
 3. Target values (defined in 'targets.<target-id>.values')
-4. Template-specific values (defined in 'targets.<target-id>.templates[n].values')`
+4. Template-specific values (defined in 'targets.<target-id>.templates[n].values')
+5. Values overwrites (from values passed via --values-overwrites)`
 
 	renderExample = `
   # Render a single target
