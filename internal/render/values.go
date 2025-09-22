@@ -13,10 +13,8 @@ import (
 	"github.com/sap-gg/gok/internal"
 )
 
-type (
-	Values       map[string]any
-	ScopedValues map[string]Values
-)
+// Values is a generic map for values that can be used in templates.
+type Values = map[string]any
 
 // ValuesOverwritesSpec are global or per-target overwrites
 type ValuesOverwritesSpec struct {
@@ -314,21 +312,21 @@ func mergeInto(dst, src Values) {
 	if src == nil {
 		return
 	}
-	for k, v := range src {
-		if sv, ok := v.(map[string]any); ok {
-			if dv, ok := dst[k]; ok {
-				if dm, ok := dv.(map[string]any); ok {
-					mergeInto(dm, sv)
+	for sourceKey, sourceValue := range src {
+		if sourceValueAsMap, ok := sourceValue.(Values); ok {
+			if destinationValueForSourceKey, ok := dst[sourceKey]; ok {
+				if dm, ok := destinationValueForSourceKey.(Values); ok {
+					mergeInto(dm, sourceValueAsMap)
 					continue
 				}
 			}
 			// copy nested map
-			cpy := make(map[string]any, len(sv))
-			mergeInto(cpy, sv)
-			dst[k] = cpy
+			cpy := make(Values, len(sourceValueAsMap))
+			mergeInto(cpy, sourceValueAsMap)
+			dst[sourceKey] = cpy
 			continue
 		}
 		// scalar or non-map, overwrite
-		dst[k] = v
+		dst[sourceKey] = sourceValue
 	}
 }

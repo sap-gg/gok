@@ -13,8 +13,7 @@ type FileStrategy interface {
 	// Name returns a human-friendly strategy name for logging/metrics.
 	Name() string
 
-	// Apply takes content from the srcContent reader, applies it to the dst path,
-	// and reports whether dst was created or modified via the tracker.
+	// Apply takes content from the srcContent reader and applies it to the dst path
 	Apply(ctx context.Context, srcContent io.Reader, dst string) error
 }
 
