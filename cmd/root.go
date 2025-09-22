@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 
@@ -12,6 +13,9 @@ import (
 	"github.com/sap-gg/gok/internal/logging"
 )
 
+// Version will be overwritten during build
+var Version = "dev"
+
 var cfgFile string
 
 const (
@@ -21,8 +25,10 @@ const (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "gok",
-	Short: "Landscape Renderer for Minecraft",
+	Use:     "gok",
+	Short:   fmt.Sprintf("Template Renderer (Version %s)", Version),
+	Long:    "gok is a tool to render templates with values from various sources.",
+	Version: Version,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		configPath, configErr := initConfig()
 		logging.Init(nil)
@@ -35,7 +41,7 @@ var rootCmd = &cobra.Command{
 		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		log.Info().Msg("Hello from gok!")
+		log.Info().Msgf("Hello from gok (version %s)", Version)
 	},
 }
 
