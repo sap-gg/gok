@@ -27,9 +27,11 @@ type Engine struct {
 	renderer        *templ.TemplateRenderer
 	artifactTracker *artifact.Tracker
 
-	externalValues   *ValuesOverwritesSpec
-	secretData       Values
-	valuesOverwrites *ValuesOverwritesSpec
+	globalValues         Values
+	secretValues         Values
+	externalFilesValues  *ValuesOverwritesSpec
+	flagValueOverwrites  *ValuesOverwritesSpec
+	resolvedTargetValues map[string]Values // for cross-target lookups only
 
 	// manifestDir is the directory of the manifest.yaml
 	manifestDir         string
@@ -45,9 +47,11 @@ func NewEngine(
 	manifestDir, workDir string,
 	renderer *templ.TemplateRenderer,
 	registry *strategy.Registry,
-	externalValues *ValuesOverwritesSpec,
+	globalValues Values,
 	secretValues Values,
-	valuesOverwrites *ValuesOverwritesSpec,
+	externalFilesValues *ValuesOverwritesSpec,
+	flagValueOverwrites *ValuesOverwritesSpec,
+	resolvedTargetValues map[string]Values,
 ) (*Engine, error) {
 	if manifestDir == "" {
 		return nil, fmt.Errorf("manifest dir is required")
@@ -79,9 +83,11 @@ func NewEngine(
 		renderer:        renderer,
 		artifactTracker: artifactTracker,
 
-		externalValues:   externalValues,
-		secretData:       secretValues,
-		valuesOverwrites: valuesOverwrites,
+		globalValues:         globalValues,
+		secretValues:         secretValues,
+		externalFilesValues:  externalFilesValues,
+		flagValueOverwrites:  flagValueOverwrites,
+		resolvedTargetValues: resolvedTargetValues,
 
 		manifestDir:         manifestDir,
 		manifestDirResolver: manifestDirResolver,
@@ -93,11 +99,11 @@ func NewEngine(
 
 // RenderTargets renders the specified targets from the manifest.
 // It continues rendering other targets even if one fails, and returns a combined error.
-func (e *Engine) RenderTargets(ctx context.Context, manifest *Manifest, targets []*ManifestTarget) error {
+func (e *Engine) RenderTargets(ctx context.Context, targets []*ManifestTarget) error {
 	// Pre-calculate the complete values map for cross-target value access
 	var combined error
 	for _, target := range targets {
-		if err := e.RenderTarget(ctx, manifest, target); err != nil {
+		if err := e.RenderTarget(ctx, target); err != nil {
 			log.Error().Err(err).Msgf("failed to render target %s", target.ID)
 			combined = errors.Join(combined, fmt.Errorf("target %s: %w", target.ID, err))
 		} else {
@@ -110,7 +116,6 @@ func (e *Engine) RenderTargets(ctx context.Context, manifest *Manifest, targets 
 // RenderTarget renders a single target from the manifest.
 func (e *Engine) RenderTarget(
 	ctx context.Context,
-	manifest *Manifest,
 	target *ManifestTarget,
 ) error {
 	// create the output directory INSIDE the workDir
@@ -130,7 +135,6 @@ func (e *Engine) RenderTarget(
 
 	for _, templateSpec := range target.Templates {
 		if err := e.applyTemplate(ctx,
-			manifest,
 			target,
 			templateSpec,
 			currentOutputResolver,
@@ -144,7 +148,6 @@ func (e *Engine) RenderTarget(
 
 func (e *Engine) applyTemplate(
 	ctx context.Context,
-	manifest *Manifest,
 	target *ManifestTarget,
 	templateSpec *TemplateSpec,
 	currentOutputResolver *GenericPathResolver,
@@ -183,24 +186,20 @@ func (e *Engine) applyTemplate(
 		}
 	}
 
-	externalValues := e.externalValues.ValuesForTarget(target.ID)
-	overwrites := e.valuesOverwrites.ValuesForTarget(target.ID)
-
-	// build all available values for the template
-	// precedence (highest to lowest):
-	// 1. template-specific values
-	// 2. target-specific values
-	// 3. externally provided values (e.g. CLI -set flags)
-	// 4. global manifest values
-	availableValues := DeepMerge(
-		manifest.Values,
+	availableValues := ComputeTemplateValues(e.globalValues,
 		target.Values,
-		externalValues,
 		templateSpec.Values,
-		overwrites,
+		e.externalFilesValues.ValuesForTarget(target.ID),
+		e.flagValueOverwrites.ValuesForTarget(target.ID),
 	)
 
-	templateContext, err := buildTemplateContext(l, templateManifest, manifest, target, availableValues, e.secretData)
+	templateContext, err := buildTemplateContext(
+		l,
+		templateManifest,
+		target,
+		availableValues,
+		e.secretValues,
+		e.resolvedTargetValues)
 	if err != nil {
 		return fmt.Errorf("build template context: %w", err)
 	}
@@ -229,10 +228,10 @@ func (e *Engine) applyTemplate(
 func buildTemplateContext(
 	l zerolog.Logger,
 	templateManifest *TemplateManifest,
-	manifest *Manifest,
 	target *ManifestTarget,
 	availableValues Values,
 	availableSecrets Values,
+	allResolvedTargetValues map[string]Values,
 ) (Values, error) {
 	if templateManifest == nil || templateManifest.Imports == nil {
 		// no manifest / no imports, so no values ¯\_(ツ)_/¯
@@ -241,7 +240,7 @@ func buildTemplateContext(
 
 	importedValues := make(Values)
 	importedSecrets := make(Values)
-	var manifestForTemplate *Manifest
+	importedTargets := make(Values)
 	var targetForTemplate *ManifestTarget
 
 	// process non-sensitive value imports
@@ -288,10 +287,41 @@ func buildTemplateContext(
 		}
 	}
 
-	// process manifest import
-	if tm := templateManifest.Imports.Manifest; tm != nil {
-		l.Debug().Msgf("template imports the whole manifest: %s", tm.Description)
-		manifestForTemplate = manifest
+	// process target imports
+	for targetID, req := range templateManifest.Imports.Targets {
+		l.Debug().Msgf("template requires target %q: %s", targetID, req.Description)
+
+		sourceTargetValues, ok := allResolvedTargetValues[targetID]
+		if !ok {
+			l.Error().Msgf("template requires target %q but it could not found", targetID)
+			l.Error().Msgf(" ? %s", req.Description)
+			return nil, fmt.Errorf("required target %q not found", targetID)
+		}
+
+		filteredTargetValues := make(Values)
+		for key, valReq := range req.Values {
+			val, found := LookupNestedValue(sourceTargetValues, key)
+			var finalValue any
+			if found {
+				finalValue = val
+			} else if valReq.Required {
+				l.Error().Msgf("template requires value %q from target %q but it could not found", key, targetID)
+				l.Error().Msgf(" ? %s", valReq.Description)
+				return nil, fmt.Errorf("required value %q from target %q not found", key, targetID)
+			} else {
+				l.Debug().Msgf("using default for non-required value %q from target %q", key, targetID)
+				finalValue = valReq.Default
+			}
+			if err := SetNestedValue(filteredTargetValues, key, finalValue); err != nil {
+				return nil, fmt.Errorf("set imported target %q value %q: %w", targetID, key, err)
+			}
+		}
+
+		if err := SetNestedValue(importedTargets, targetID, Values{
+			"values": filteredTargetValues,
+		}); err != nil {
+			return nil, fmt.Errorf("set imported target %q: %w", targetID, err)
+		}
 	}
 
 	// process target import
@@ -301,10 +331,10 @@ func buildTemplateContext(
 	}
 
 	return Values{
-		"target":   targetForTemplate,
-		"manifest": manifestForTemplate,
-		"values":   importedValues,
-		"secrets":  importedSecrets,
+		"values":  importedValues,
+		"secrets": importedSecrets,
+		"target":  targetForTemplate,
+		"targets": importedTargets,
 	}, nil
 }
 

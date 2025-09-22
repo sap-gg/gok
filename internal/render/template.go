@@ -86,11 +86,11 @@ type TemplateImports struct {
 	// Secrets to import from the manifest
 	Secrets map[string]ValueImport `yaml:"secrets"`
 
-	// Manifest indicates that the whole manifest should be imported
-	Manifest *ReasonedImport `yaml:"manifest"`
-
 	// Target indicates that the whole target should be imported
 	Target *ReasonedImport `yaml:"target"`
+
+	// Targets to import from the manifest with values lookup
+	Targets map[string]TargetImport `yaml:"targets"`
 }
 
 // ValueImport defines a required (non-)sensitive value.
@@ -109,6 +109,14 @@ type ValueImport struct {
 type ReasonedImport struct {
 	// Description is the reasoning for importing the whole manifest (e.g. what it's used for)
 	Description string `yaml:"description"`
+}
+
+// TargetImport defines a target to import with specific value imports.
+type TargetImport struct {
+	// Description is the reasoning for importing this target (e.g. what it's used for)
+	Description string `yaml:"description" validate:"required"`
+	// Values is a map of value keys (dot-notation) to their import requirements.
+	Values map[string]ValueImport `yaml:"values"`
 }
 
 // ReadTemplateManifest finds and parses a template.yaml file in a given directory.

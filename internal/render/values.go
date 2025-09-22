@@ -250,6 +250,56 @@ func SetNestedValue(dest Values, path string, value any) error {
 	return nil
 }
 
+// ComputeTargetValues merges values for a target in the following order (later overwrite earlier):
+// 1. globalValues from the manifest
+// 2. targetValues from the manifest target
+// 3. externalFilesValues from external values files
+// 4. flagOverwriteValues from command line flags
+func ComputeTargetValues(
+	globalValues Values,
+	targetValues Values,
+	externalFilesValues Values,
+	flagOverwriteValues Values,
+) Values {
+	return DeepMerge(globalValues, targetValues, externalFilesValues, flagOverwriteValues)
+}
+
+// ComputeTemplateValues merges values for a template in the following order (later overwrite earlier):
+// 1. globalValues from the manifest
+// 2. targetValues from the manifest target
+// 3. templateValues from the template defaults
+// 4. externalFilesValues from external values files
+// 5. flagOverwriteValues from command line flags
+func ComputeTemplateValues(
+	globalValues Values,
+	targetValues Values,
+	templateValues Values,
+	externalFilesValues Values,
+	flagOverwriteValues Values,
+) Values {
+	return DeepMerge(globalValues, targetValues, templateValues, externalFilesValues, flagOverwriteValues)
+}
+
+// PreComputeAllTargetValues computes the final merged values for all targets in the manifest,
+func PreComputeAllTargetValues(
+	manifest *Manifest,
+	externalValues *ValuesOverwritesSpec,
+	overwrites *ValuesOverwritesSpec,
+) (map[string]Values, error) {
+	resolvedValues := make(map[string]Values)
+
+	for id, target := range manifest.Targets {
+		resolvedValues[id] = ComputeTargetValues(
+			manifest.Values,
+			target.Values,
+			externalValues.ValuesForTarget(id),
+			overwrites.ValuesForTarget(id),
+		)
+	}
+
+	return resolvedValues, nil
+}
+
 // DeepMerge merges multiple Values maps into one, from left to right.
 // Nested maps are merged recursively, while scalar values are overwritten by later maps.
 func DeepMerge(maps ...Values) Values {

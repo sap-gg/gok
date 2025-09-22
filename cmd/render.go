@@ -55,28 +55,6 @@ var renderCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("reading manifest: %w", err)
 		}
-
-		// load any external values files (-f)
-		externalValues, err := render.ParseValuesOverwrites(ctx, renderFlags.valuesFiles)
-		if err != nil {
-			return fmt.Errorf("loading external values files: %w", err)
-		}
-
-		valuesOverwrites, err := render.ParseStringToStringValuesOverwrites(ctx, renderFlags.valueOverwrites)
-		if err != nil {
-			return fmt.Errorf("loading flag string overwrites: %w", err)
-		}
-
-		secretValues, err := render.LoadValuesFiles(ctx, renderFlags.secretFiles)
-		if err != nil {
-			return fmt.Errorf("loading secret values files: %w", err)
-		}
-		sensitiveStrings := render.CollectStrings(secretValues)
-		logging.Init(sensitiveStrings)
-		log.Debug().Int("count", len(sensitiveStrings)).
-			Msg("initialized logging with sensitive values redaction")
-
-		// select which targets to render
 		targets, err := render.SelectTargets(manifest, renderFlags.allTargets, renderFlags.targets, renderFlags.tags)
 		if err != nil {
 			return fmt.Errorf("selecting targets: %w", err)
@@ -86,6 +64,34 @@ var renderCmd = &cobra.Command{
 		}
 		for _, t := range targets {
 			log.Info().Msgf("selected render target: %s", t.ID)
+		}
+
+		// load any external values files (-f)
+		externalFilesValues, err := render.ParseValuesOverwrites(ctx, renderFlags.valuesFiles)
+		if err != nil {
+			return fmt.Errorf("loading external values files: %w", err)
+		}
+
+		flagValueOverwrites, err := render.ParseStringToStringValuesOverwrites(ctx, renderFlags.valueOverwrites)
+		if err != nil {
+			return fmt.Errorf("loading flag string overwrites: %w", err)
+		}
+
+		secretValues, err := render.LoadValuesFiles(ctx, renderFlags.secretFiles)
+		if err != nil {
+			return fmt.Errorf("loading secret values files: %w", err)
+		}
+
+		// setup logging redaction for sensitive values
+		sensitiveStrings := render.CollectStrings(secretValues)
+		logging.Init(sensitiveStrings)
+		log.Debug().Int("count", len(sensitiveStrings)).
+			Msg("initialized logging with sensitive values redaction")
+
+		log.Debug().Msg("pre-computing final values for all targets...")
+		resolvedTargetValues, err := render.PreComputeAllTargetValues(manifest, externalFilesValues, flagValueOverwrites)
+		if err != nil {
+			return fmt.Errorf("pre-computing target values: %w", err)
 		}
 
 		// rendering always happens in a temporary directory, and this directory will _always_ be deleted after rendering
@@ -113,19 +119,22 @@ var renderCmd = &cobra.Command{
 			return fmt.Errorf("creating strategy registry: %w", err)
 		}
 
-		engine, err := render.NewEngine(manifestDir,
+		engine, err := render.NewEngine(
+			manifestDir,
 			workDir,
 			renderer,
 			registry,
-			externalValues,
+			manifest.Values,
 			secretValues,
-			valuesOverwrites,
+			externalFilesValues,  // raw -f values
+			flagValueOverwrites,  // raw -v values
+			resolvedTargetValues, // pre-computed target values for .targets scope
 		)
 		if err != nil {
 			return fmt.Errorf("creating render engine: %w", err)
 		}
 
-		if err := engine.RenderTargets(ctx, manifest, targets); err != nil {
+		if err := engine.RenderTargets(ctx, targets); err != nil {
 			return fmt.Errorf("rendering targets: %w", err)
 		}
 
