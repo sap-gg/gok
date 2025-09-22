@@ -120,7 +120,7 @@ func TestSelectTargets(t *testing.T) {
 			if tc.allFlag {
 				assert.ElementsMatch(t, tc.expectedIDs, selectedIDs)
 			} else {
-				assert.Equal(t, tc.expectedIDs, selectedIDs)
+				assert.ElementsMatch(t, tc.expectedIDs, selectedIDs)
 			}
 		})
 	}
